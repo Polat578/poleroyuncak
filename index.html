@@ -81,29 +81,56 @@
     const forced = (params.get('lang') || '').toLowerCase();
     const nav = (navigator.language || navigator.userLanguage || 'tr').toLowerCase();
 
-    async function detectLanguage() {
-      let locale = forced || nav;
-      try {
-        const res = await fetch('https://ipapi.co/json');
-        const data = await res.json();
-        if (data && data.country_code === 'DE' && !forced) locale = 'de';
-        if (data && data.country_code === 'RU' && !forced) locale = 'ru';
-        if (data && data.country_code === 'CN' && !forced) locale = 'zh';
-        if (data && data.country_code === 'SA' && !forced) locale = 'ar';
-      } catch (e) {}
-      return locale;
-    }
-
+    // === Language Strings (20+ major locales) ===
     const map = {
       'tr': { h: 'YAKINDA HİZMETİNİZDEYİZ', s: 'Yeni web sitemizi hazırlıyoruz. Çok yakında buradayız.' },
       'en': { h: 'COMING SOON',              s: 'We are preparing our new website. See you soon.' },
+      'de': { h: 'WIR SIND BALD FÜR SIE DA', s: 'Unsere neue Website wird bald verfügbar sein.' },
       'ru': { h: 'СКОРО МЫ БУДЕМ С ВАМИ',    s: 'Мы готовим наш новый сайт. Совсем скоро будем на связи.' },
+      'ar': { h: 'قريباً في خدمتكم',         s: 'نحن نقوم بإعداد موقعنا الجديد. ترقبونا قريباً.' },
       'zh': { h: '即将为您服务',               s: '我们正在准备新网站，敬请期待。' },
       'zh-cn': { h: '即将为您服务',            s: '我们正在准备新网站，敬请期待。' },
       'zh-tw': { h: '即將為您服務',            s: '我們正在準備新網站，敬請期待。' },
-      'ar': { h: 'قريباً في خدمتكم',         s: 'نحن نقوم بإعداد موقعنا الجديد. ترقبونا قريباً.' },
-      'de': { h: 'WIR SIND BALD FÜR SIE DA',  s: 'Unsere neue Website wird bald verfügbar sein.' }
+      'fr': { h: 'BIENTÔT DISPONIBLE',        s: 'Nous préparons notre nouveau site web. À très bientôt.' },
+      'es': { h: 'PRÓXIMAMENTE',              s: 'Estamos preparando nuestro nuevo sitio web. Nos vemos pronto.' },
+      'pt': { h: 'EM BREVE',                  s: 'Estamos preparando nosso novo site. Até breve.' },
+      'it': { h: 'PROSSIMAMENTE',             s: 'Stiamo preparando il nostro nuovo sito. A presto.' },
+      'nl': { h: 'BINNENKORT BESCHIKBAAR',    s: 'We bereiden onze nieuwe website voor. Tot snel.' },
+      'pl': { h: 'WKRÓTCE DOSTĘPNE',          s: 'Przygotowujemy naszą nową stronę. Do zobaczenia wkrótce.' },
+      'uk': { h: 'СКОРО МИ БУДЕМО З ВАМИ',    s: 'Ми готуємо наш новий сайт. Зустрінемося незабаром.' },
+      'ja': { h: '近日公開',                   s: '新しいウェブサイトを準備中です。もうすぐ公開します。' },
+      'ko': { h: '곧 찾아뵙겠습니다',             s: '새 웹사이트를 준비 중입니다. 곧 만나뵙겠습니다.' },
+      'fa': { h: 'به‌زودی در خدمتتان خواهیم بود', s: 'در حال آماده‌سازی وب‌سایت جدید هستیم. به‌زودی می‌بینیمتان.' },
+      'hi': { h: 'जल्द ही आ रहे हैं',          s: 'हम अपनी नई वेबसाइट तैयार कर रहे हैं। जल्द मिलते हैं।' }
     };
+
+    // Map country codes (IP) to a preferred language code
+    function languageFromCountry(cc) {
+      if (!cc) return null;
+      cc = cc.toUpperCase();
+      const groups = [
+        { langs: ['tr'], countries: ['TR'] },
+        { langs: ['en'], countries: ['US','GB','AU','NZ','IE','CA','SG'] },
+        { langs: ['de'], countries: ['DE','AT','CH'] },
+        { langs: ['fr'], countries: ['FR','BE','LU','CH'] },
+        { langs: ['es'], countries: ['ES','MX','AR','CO','CL','PE'] },
+        { langs: ['pt'], countries: ['PT','BR'] },
+        { langs: ['it'], countries: ['IT'] },
+        { langs: ['nl'], countries: ['NL'] },
+        { langs: ['pl'], countries: ['PL'] },
+        { langs: ['uk'], countries: ['UA'] },
+        { langs: ['ru'], countries: ['RU','KZ','BY'] },
+        { langs: ['ar'], countries: ['SA','AE','KW','QA','BH','OM','EG','MA'] },
+        { langs: ['zh'], countries: ['CN','HK','MO'] },
+        { langs: ['zh-tw'], countries: ['TW'] },
+        { langs: ['ja'], countries: ['JP'] },
+        { langs: ['ko'], countries: ['KR'] },
+        { langs: ['fa'], countries: ['IR'] },
+        { langs: ['hi'], countries: ['IN'] },
+      ];
+      for (const g of groups) if (g.countries.includes(cc)) return g.langs[0];
+      return null;
+    }
 
     function pickLocale(code){
       if(!code) return 'tr';
@@ -112,13 +139,25 @@
       const base = code.split('-')[0];
       if(map[base]) return base;
       if(code.startsWith('zh')) return 'zh';
-      return 'tr';
+      return 'en';
+    }
+
+    async function detectLanguage() {
+      // Priority: URL ?lang → IP country → browser locale
+      if (forced) return pickLocale(forced);
+      try {
+        const res = await fetch('https://ipapi.co/json');
+        const data = await res.json();
+        const fromIP = languageFromCountry(data && data.country_code);
+        if (fromIP) return pickLocale(fromIP);
+      } catch (e) {}
+      return pickLocale(nav);
     }
 
     detectLanguage().then(locale => {
-      const chosen = pickLocale(locale);
-      headline.textContent = map[chosen].h;
-      sub.textContent = map[chosen].s;
+      headline.textContent = map[locale].h;
+      sub.textContent = map[locale].s;
+      document.documentElement.setAttribute('lang', locale);
     });
   </script>
 </body>
