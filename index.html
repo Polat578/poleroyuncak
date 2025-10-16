@@ -9,9 +9,9 @@
   <style>
     :root {
       --bg: #ffffff;
-      --fg: #0f172a;          /* koyu gri metin */
-      --accent: #0b3d91;      /* kurumsal mavi */
-      --muted: #64748b;       /* ikincil metin */
+      --fg: #0f172a;
+      --accent: #0b3d91;
+      --muted: #64748b;
       --border: rgba(15,23,42,.06);
     }
     *, *::before, *::after { box-sizing: border-box; }
@@ -27,7 +27,9 @@
     .logo { display: inline-flex; flex-direction: column; align-items: center; gap: 12px; }
     .logo img {
       height: clamp(120px, 22vw, 180px); width: auto; display: block;
-      opacity: 0; animation: fadeInGlow 2.2s ease-out forwards; filter: brightness(0.75);
+      opacity: 0; animation: fadeInGlow 2.2s ease-out forwards; filter: brightness(0.95);
+      background: transparent;
+      mix-blend-mode: multiply;
     }
     @keyframes fadeInGlow {
       0%   { opacity: 0;   filter: brightness(0.65) blur(2px); transform: scale(.98); }
