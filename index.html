@@ -19,32 +19,34 @@
     body {
       margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
       background: var(--bg); color: var(--fg);
-      display: grid; place-items: center; padding: 24px;
+      display: flex; align-items: center; justify-content: center; flex-direction: column;
+      min-height: 100vh; padding: 0 24px;
     }
-    .wrap { text-align: center; max-width: 780px; width: 100%; }
-    .block { padding: 28px 12px; }
 
-    .logo { display: inline-flex; flex-direction: column; align-items: center; gap: 12px; }
+    .wrap { text-align: center; max-width: 780px; width: 100%; }
+
+    .logo { display: flex; flex-direction: column; align-items: center; justify-content: center; margin-bottom: 12px; }
     .logo img {
-      height: clamp(120px, 22vw, 180px); width: auto; display: block;
-      opacity: 0; animation: fadeInGlow 2.2s ease-out forwards; filter: brightness(0.95);
-      background: transparent;
-      mix-blend-mode: multiply;
+      height: clamp(240px, 35vw, 340px); width: auto; display: block;
+      opacity: 0; animation: fadeInGlow 2.2s ease-out forwards; filter: brightness(1);
+      background: transparent; mix-blend-mode: multiply;
+      transform: translateY(0);
     }
+
     @keyframes fadeInGlow {
-      0%   { opacity: 0;   filter: brightness(0.65) blur(2px); transform: scale(.98); }
-      60%  { opacity: 0.9; filter: brightness(1.15); }
-      100% { opacity: 1;   filter: brightness(1);    transform: scale(1); }
+      0%   { opacity: 0;   filter: brightness(0.65) blur(2px); transform: scale(.95) translateY(25px); }
+      60%  { opacity: 0.9; filter: brightness(1.15); transform: scale(1.02) translateY(5px); }
+      100% { opacity: 1;   filter: brightness(1); transform: scale(1) translateY(0); }
     }
 
     h1 {
-      margin: 18px 0 6px; font-weight: 800;
+      margin: 10px 0 4px; font-weight: 800;
       font-size: clamp(28px, 6.5vw, 44px); line-height: 1.1;
       letter-spacing: .01em;
       color: #111827;
     }
-    .sub { margin-top: 6px; font-size: clamp(14px, 2.3vw, 16px); color: var(--muted); }
-    footer { margin-top: 22px; font-size: 12px; color: #94a3b8; }
+    .sub { margin-top: 4px; font-size: clamp(14px, 2.3vw, 16px); color: var(--muted); }
+    footer { margin-top: 20px; font-size: 12px; color: #94a3b8; }
 
     @media (prefers-color-scheme: dark) {
       :root { --bg: #0b1220; --fg: #e5e7eb; --muted:#cbd5e1; }
@@ -79,6 +81,21 @@
     const forced = (params.get('lang') || '').toLowerCase();
     const nav = (navigator.language || navigator.userLanguage || 'tr').toLowerCase();
 
+    // VPN durumlarında Almanya gibi IP tabanlı yerlerde navigator.language bazen en-US döner.
+    // Bunun için ek kontrol: Almanya IP'si tespit edilirse de (geo API ile) Almanca seç.
+    async function detectLanguage() {
+      let locale = forced || nav;
+      try {
+        const res = await fetch('https://ipapi.co/json');
+        const data = await res.json();
+        if (data && data.country_code === 'DE' && !forced) locale = 'de';
+        if (data && data.country_code === 'RU' && !forced) locale = 'ru';
+        if (data && data.country_code === 'CN' && !forced) locale = 'zh';
+        if (data && data.country_code === 'SA' && !forced) locale = 'ar';
+      } catch (e) {}
+      return locale;
+    }
+
     const map = {
       'tr': { h: 'YAKINDA HİZMETİNİZDEYİZ', s: 'Yeni web sitemizi hazırlıyoruz. Çok yakında buradayız.' },
       'en': { h: 'COMING SOON',              s: 'We are preparing our new website. See you soon.' },
@@ -100,9 +117,11 @@
       return 'tr';
     }
 
-    const chosen = pickLocale(forced || nav);
-    headline.textContent = map[chosen].h;
-    sub.textContent = map[chosen].s;
+    detectLanguage().then(locale => {
+      const chosen = pickLocale(locale);
+      headline.textContent = map[chosen].h;
+      sub.textContent = map[chosen].s;
+    });
   </script>
 </body>
 </html>
