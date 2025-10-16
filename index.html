@@ -27,16 +27,16 @@
 
     .logo { display: flex; flex-direction: column; align-items: center; justify-content: center; margin-bottom: 12px; }
     .logo img {
-      height: clamp(240px, 35vw, 340px); width: auto; display: block;
-      opacity: 0; animation: fadeInGlow 2.2s ease-out forwards; filter: brightness(1);
-      background: transparent; mix-blend-mode: multiply;
-      transform: translateY(0);
+      height: clamp(280px, 40vw, 380px); width: auto; display: block;
+      opacity: 0; animation: fadeInGlow 2s ease-out forwards;
+      background: transparent;
+      filter: brightness(1.05) contrast(1.05) saturate(1.1);
     }
 
     @keyframes fadeInGlow {
-      0%   { opacity: 0;   filter: brightness(0.65) blur(2px); transform: scale(.95) translateY(25px); }
-      60%  { opacity: 0.9; filter: brightness(1.15); transform: scale(1.02) translateY(5px); }
-      100% { opacity: 1;   filter: brightness(1); transform: scale(1) translateY(0); }
+      0%   { opacity: 0; filter: brightness(0.6) blur(2px); transform: scale(0.95) translateY(20px); }
+      60%  { opacity: 0.85; filter: brightness(1.2) contrast(1.1); transform: scale(1.02) translateY(0); }
+      100% { opacity: 1; filter: brightness(1.1) contrast(1.05); transform: scale(1); }
     }
 
     h1 {
@@ -81,8 +81,6 @@
     const forced = (params.get('lang') || '').toLowerCase();
     const nav = (navigator.language || navigator.userLanguage || 'tr').toLowerCase();
 
-    // VPN durumlarında Almanya gibi IP tabanlı yerlerde navigator.language bazen en-US döner.
-    // Bunun için ek kontrol: Almanya IP'si tespit edilirse de (geo API ile) Almanca seç.
     async function detectLanguage() {
       let locale = forced || nav;
       try {
