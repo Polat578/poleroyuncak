@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Skala MRP Asistan — Chat</title>
+  <style>
+    :root { --brand:#2563eb; --bg:#ffffff; --text:#111827; --muted:#6b7280; --shadow:0 10px 30px rgba(0,0,0,.15); }
+    body { font-family: system-ui, sans-serif; margin:0 }
+    #asst-fab { position:fixed; right:18px; bottom:18px; width:56px; height:56px; border-radius:50%; background:var(--brand); color:#fff;
+      display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow); border:none; cursor:pointer; }
+    #asst-fab svg { width:28px; height:28px; }
+    #asst-drawer { position:fixed; right:18px; bottom:86px; width:360px; max-width:92vw; height:560px; max-height:78vh;
+      background:var(--bg); border-radius:16px; box-shadow:var(--shadow); display:none; flex-direction:column; overflow:hidden; border:1px solid #e5e7eb; }
+    #asst-header { padding:14px 16px; background:#f8fafc; border-bottom:1px solid #e5e7eb; }
+    #asst-header .title { font-weight:700; color:var(--text); }
+    #asst-header .muted { font-size:12px; color:var(--muted); }
+    #asst-messages { flex:1; padding:12px; overflow:auto; background:linear-gradient(#fff,#f9fafb); }
+    .msg { max-width:82%; padding:10px 12px; border-radius:12px; margin:6px 0; font-size:14px; line-height:1.35; box-shadow:0 1px 2px rgba(0,0,0,.05); }
+    .msg.user { background:#e0f2fe; margin-left:auto; border-bottom-right-radius:4px; }
+    .msg.bot { background:#eef2ff; margin-right:auto; border-bottom-left-radius:4px; }
+    #asst-inputbar { display:flex; padding:10px; gap:8px; border-top:1px solid #e5e7eb; background:#fff; }
+    #asst-input { flex:1; border:1px solid #e5e7eb; border-radius:10px; padding:10px 12px; font-size:14px; }
+    #asst-send { background:var(--brand); color:#fff; border:none; border-radius:10px; padding:10px 14px; cursor:pointer; }
+  </style>
+</head>
+<body>
+
+<button id="asst-fab" aria-label="Asistanı aç/kapat">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h6"/><path d="M8 9h8M8 13h6"/>
+  </svg>
+</button>
+
+<div id="asst-drawer" role="dialog" aria-modal="true">
+  <div id="asst-header">
+    <div class="title">Skala MRP Asistan</div>
+    <div class="muted">Stok • Sipariş • Üretim sorguları</div>
+  </div>
+  <div id="asst-messages"></div>
+  <div id="asst-inputbar">
+    <input id="asst-input" placeholder="Örn: STK-1001 stoğum?" />
+    <button id="asst-send">Gönder</button>
+  </div>
+</div>
+
+<script>
+  // 🔧 BURAYI DÜZENLE
+  const BACKEND_URL = "https://a9e6f7917268.ngrok-free.app/chat";   // senin ngrok adresin
+  const DEMO_JWT = "BURAYA_HEALTH_ENDPOINTINDEN_ALDIGİN_TOKEN";     // /health yanıtındaki demo_token
+
+  const fab = document.getElementById("asst-fab");
+  const drawer = document.getElementById("asst-drawer");
+  const msgs = document.getElementById("asst-messages");
+  const input = document.getElementById("asst-input");
+  const sendBtn = document.getElementById("asst-send");
+
+  fab.onclick = () => { drawer.style.display = drawer.style.display === "flex" ? "none" : "flex"; input.focus(); };
+  const addMsg = (t, who) => {
+    const d = document.createElement("div");
+    d.className = "msg " + who;
+    d.textContent = t;
+    msgs.appendChild(d);
+    msgs.scrollTop = msgs.scrollHeight;
+  };
+  async function send() {
+    const text = input.value.trim();
+    if (!text) return;
+    addMsg(text, "user");
+    input.value = "";
+    addMsg("Yazıyor...", "bot");
+    try {
+      const res = await fetch(BACKEND_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(DEMO_JWT ? { Authorization: "Bearer " + DEMO_JWT } : {})
+        },
+        body: JSON.stringify({ message: text })
+      });
+      const data = await res.json();
+      msgs.lastChild.remove();
+      addMsg(data.answer || "Boş yanıt geldi.", "bot");
+    } catch (e) {
+      msgs.lastChild.remove();
+      addMsg("Bağlantı hatası: " + e.message, "bot");
+    }
+  }
+  sendBtn.onclick = send;
+  input.addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+  addMsg("Merhaba 👋  Stok, sipariş veya üretim sorgusu yazabilirsin.", "bot");
+</script>
+</body>
+</html>
