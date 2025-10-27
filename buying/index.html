@@ -151,7 +151,124 @@
 
   let stream = null, lastImageBlob = null, ocrText = "";
 
-  // Fallback: Dosya girişi ile kamera/galeri açtırma (mobilde kamera uygulamasını tetikler)
+  // ---------- Görüntü ön-işleme (grayscale + kontrast + basit adaptive threshold) ----------
+  async function preprocessForOCR(blob) {
+    const img = await createImageBitmap(blob);
+    const off = document.createElement('canvas');
+    off.width = img.width; off.height = img.height;
+    const ctx = off.getContext('2d');
+
+    // 1) gri ton
+    ctx.drawImage(img, 0, 0);
+    let d = ctx.getImageData(0, 0, off.width, off.height);
+    let px = d.data;
+    for (let i=0; i<px.length; i+=4) {
+      const r=px[i], g=px[i+1], b=px[i+2];
+      const y = 0.299*r + 0.587*g + 0.114*b;
+      px[i]=px[i+1]=px[i+2]=y;
+    }
+    ctx.putImageData(d, 0, 0);
+
+    // 2) kontrast (1.25x) + gamma (0.9)
+    d = ctx.getImageData(0, 0, off.width, off.height);
+    px = d.data;
+    const contrast = 1.25, gamma = 0.9;
+    for (let i=0; i<px.length; i+=4) {
+      let v = px[i]/255;
+      v = Math.pow(v, gamma);
+      v = (v - 0.5) * contrast + 0.5;
+      v = Math.max(0, Math.min(1, v));
+      const u = v*255|0;
+      px[i]=px[i+1]=px[i+2]=u;
+    }
+    ctx.putImageData(d, 0, 0);
+
+    // 3) basit adaptive threshold
+    const block = Math.max(15, Math.round(Math.min(off.width, off.height)/40));
+    const rad = block|0;
+    d = ctx.getImageData(0, 0, off.width, off.height);
+    px = d.data;
+    for (let y=0; y<off.height; y++) {
+      for (let x=0; x<off.width; x++) {
+        let sum=0, cnt=0;
+        for (let yy=y-rad; yy<=y+rad; yy+=rad) {
+          if (yy<0||yy>=off.height) continue;
+          for (let xx=x-rad; xx<=x+rad; xx+=rad) {
+            if (xx<0||xx>=off.width) continue;
+            const idx=(yy*off.width+xx)*4;
+            sum += px[idx];
+            cnt++;
+          }
+        }
+        const idx=(y*off.width+x)*4;
+        const mean = sum/(cnt||1);
+        const val = px[idx] < (mean-8) ? 0 : 255;
+        px[idx]=px[idx+1]=px[idx+2]=val;
+      }
+    }
+    ctx.putImageData(d, 0, 0);
+
+    return await new Promise(res => off.toBlob(res, 'image/png', 1.0));
+  }
+
+  // ---------- Akıllı isim seçici: bbox + güvene göre skorla ----------
+  function pickCompanyNameSmart(ocrData) {
+    const lines = ocrData?.lines || [];
+    if (!lines.length) return null;
+
+    function scoreLine(L) {
+      const text = (L.text || "").trim();
+      if (!text) return -1e9;
+      const hasDigit = /\d/.test(text);
+      const { x0=0, y0=0, x1=0, y1=0 } = L.bbox || {};
+      const h = Math.max(1, (y1 - y0));
+      const yTop = y0;
+      const allCaps = text === text.toUpperCase() && /[A-ZÇĞİÖŞÜ]/.test(text);
+      const reasonableLen = text.length >= 2 && text.length <= 32;
+      const brandy = /\b(ltd|anonim|a\.ş|aş|inc|ltd\.|limited|holding|oyuncak|plastic|gıda|tekstil)\b/i.test(text);
+
+      let s = 0;
+      s += (1000 - Math.min(1000, yTop)); // üstte olana puan
+      s += h * 2;                         // büyük punto/logoya yakın
+      if (!hasDigit) s += 80;
+      if (allCaps) s += 60;
+      if (reasonableLen) s += 50;
+      if (brandy) s += 40;
+
+      if (/@/.test(text) || /(mah\.|cad\.|sok\.|no[:\s]|istanbul|ankara|izmir|bursa|kocaeli|antalya|adana|konya|gaziantep|kayseri|mersin|eskişehir)/i.test(text) || /(\+?90|0?\s?5\d{2})/.test(text)) {
+        s -= 200; // iletişim/adres satırlarını bastır
+      }
+
+      let avgConf = 0, cCount = 0;
+      (L.words || []).forEach(w => { if (typeof w.confidence === 'number') { avgConf += w.confidence; cCount++; }});
+      if (cCount) s += (avgConf / cCount);
+
+      if (text.length > 40) s -= 60;
+      return s;
+    }
+
+    const scored = lines
+      .map(L => ({ text: (L.text||"").trim(), bbox: L.bbox, score: scoreLine(L) }))
+      .filter(x => x.text);
+
+    scored.sort((a,b) => b.score - a.score);
+    return scored[0]?.text || null;
+  }
+
+  // ---------- Alan çıkarımı (smart name ile) ----------
+  function extractFields(text, ocrData) {
+    const email = (text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)||[])[0]||"";
+    const tel = (text.match(/(\+?90[\s\-]?)?0?\s?5\d{2}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}|(\+?90[\s\-]?)?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}/)||[])[0]||"";
+    const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+    const addrLine = lines.find(l => /mah\.|mh\.|cad\.|cd\.|sok\.|sk\.|no[:\s]|ilçe|istanbul|ankara|izmir|bursa|kocaeli|antalya|adana|konya|gaziantep|kayseri|mersin|eskişehir/i.test(l)) || "";
+
+    let smart = pickCompanyNameSmart(ocrData);
+    if (!smart) smart = lines.slice(0,5).find(l => !/\d/.test(l) && l.length<=32) || lines[0] || "";
+
+    return { name: smart, phone: tel, email: email, address: addrLine };
+  }
+
+  // ---------- Fallback: Dosya girişi ile kamera/galeri ----------
   function useFileCaptureFallback(openPicker = false) {
     btnCapture.disabled = false;
     btnRetake.disabled = true;
@@ -176,7 +293,7 @@
     else camLog.innerHTML += ' <span class="hint">(“Fotoğraf Çek”e basınca kamera/galeri açılır.)</span>';
   }
 
-  // Kamerayı aç (getUserMedia + fallback)
+  // ---------- Kamerayı aç (getUserMedia + fallback) ----------
   btnStart.onclick = async () => {
     try {
       if (location.protocol !== 'https:') {
@@ -187,8 +304,6 @@
         camLog.innerHTML = '<span class="warn">Tarayıcı kamera API’sını desteklemiyor, fotoğraf yükleme moduna geçildi.</span>';
         return useFileCaptureFallback();
       }
-      // Instagram/TikTok/WhatsApp in-app browser’da sorun çıkabilir
-      // Mümkünse Safari/Chrome’da açın.
       stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
         audio: false
@@ -212,7 +327,7 @@
     }
   };
 
-  // Fotoğraf çek (fallback’te dosya seçtir)
+  // ---------- Fotoğraf çek (fallback’te dosya seçtir) ----------
   btnCapture.onclick = async () => {
     if (!stream || !video.videoWidth) return useFileCaptureFallback(true);
 
@@ -234,7 +349,7 @@
     }, 'image/jpeg', 0.92);
   };
 
-  // Tekrar çek (her iki modda da)
+  // ---------- Tekrar çek ----------
   btnRetake.onclick = () => {
     preview.style.display = 'none';
     if (stream) {
@@ -242,7 +357,6 @@
       btnOcr.disabled = true;
       camLog.textContent = "Tekrar çekebilirsiniz.";
     } else {
-      // Fallback modda tekrar dosya seçtir
       fileInput.value = '';
       lastImageBlob = null;
       btnOcr.disabled = true;
@@ -250,31 +364,25 @@
     }
   };
 
-  // Basit alan çıkarımı (TR ağırlıklı)
-  function extractFields(text) {
-    const email = (text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)||[])[0]||"";
-    const tel = (text.match(/(\+?90[\s\-]?)?0?\s?5\d{2}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}|(\+?90[\s\-]?)?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}/)||[])[0]||"";
-    const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-    const addrLine = lines.find(l => /mah\.|mh\.|cad\.|cd\.|sok\.|sk\.|no[:\s]|ilçe|istanbul|ankara|izmir|bursa|kocaeli|antalya|adana|konya|gaziantep|kayseri|mersin|eskişehir/i.test(l)) || "";
-    const nameCand = lines.slice(0,5).find(l => !/\d/.test(l) && l.length<=32) || lines[0] || "";
-    return { name: nameCand, phone: tel, email: email, address: addrLine };
-  }
-
-  // OCR çalıştır
+  // ---------- OCR (ön-işleme + data.lines/words ile akıllı isim) ----------
   btnOcr.onclick = async () => {
     if (!lastImageBlob) return;
     btnOcr.disabled = true; btnOcr.textContent = "OCR çalışıyor...";
     try {
-      const { data } = await Tesseract.recognize(lastImageBlob, 'tur+eng', {
+      const pre = await preprocessForOCR(lastImageBlob);
+      const { data } = await Tesseract.recognize(pre, 'tur+eng', {
         logger: m => { camLog.textContent = `OCR: ${m.status} ${Math.round((m.progress||0)*100)}%`; }
       });
+
       ocrText = (data.text || "").trim();
       rawText.textContent = ocrText || "(metin bulunamadı)";
-      const info = extractFields(ocrText);
+
+      const info = extractFields(ocrText, data);
       fields.name.value = info.name;
       fields.phone.value = info.phone;
       fields.email.value = info.email;
       fields.address.value = info.address;
+
       btnSave.disabled = false;
       camLog.innerHTML = `OCR tamam: <span class="ok">alanlar dolduruldu</span>`;
     } catch (e) {
@@ -285,14 +393,13 @@
     }
   };
 
-  // Kaydet → Firebase Storage + Firestore
+  // ---------- Kaydet → Firebase Storage + Firestore ----------
   btnSave.onclick = async () => {
     if (!db || !storage || !uid) { saveMsg.innerHTML = '<span class="warn">Firebase yapılandır.</span>'; return; }
     if (!fields.name.value.trim()) { saveMsg.innerHTML = '<span class="warn">Şirket adı zorunlu.</span>'; return; }
     btnSave.disabled = true; saveMsg.textContent = "Kaydediliyor...";
 
     try {
-      // 1) Foto yükle
       let imageUrl = null;
       if (lastImageBlob) {
         const key = `cards/${uid}/${crypto.randomUUID()}.jpg`;
@@ -300,7 +407,7 @@
         await ref.put(lastImageBlob, { contentType: 'image/jpeg' });
         imageUrl = await ref.getDownloadURL();
       }
-      // 2) DB yaz
+
       const doc = {
         name: fields.name.value.trim(),
         phone: fields.phone.value.trim() || null,
@@ -312,6 +419,7 @@
         ocrRaw: ocrText || null
       };
       await db.collection('companies').add(doc);
+
       saveMsg.innerHTML = '<span class="ok">Kaydedildi ✅</span>';
       Object.values(fields).forEach(i => i.value = "");
       rawText.textContent = "";
@@ -322,7 +430,7 @@
     }
   };
 
-  // Tarayıcı desteği kontrolü — gerekirse otomatik fallback
+  // ---------- Tarayıcı desteği kontrolü — gerekirse otomatik fallback ----------
   if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
     camLog.innerHTML = '<span class="warn">Tarayıcı kamera API’sını yerel olarak göstermiyor, fotoğraf yükleme moduna geçildi.</span>';
     useFileCaptureFallback();
