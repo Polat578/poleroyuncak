@@ -47,6 +47,8 @@
           <video id="video" playsinline muted></video>
           <canvas id="canvas" style="display:none"></canvas>
           <img id="preview" alt="Önizleme" style="display:none"/>
+          <!-- Fallback için gizli file input -->
+          <input id="fileInput" type="file" accept="image/*" capture="environment" style="display:none" />
         </div>
         <p class="hint mono" id="camLog"></p>
       </section>
@@ -132,51 +134,95 @@
   const video = document.getElementById('video');
   const canvas = document.getElementById('canvas');
   const preview = document.getElementById('preview');
+  const fileInput = document.getElementById('fileInput');
+
   const btnStart = document.getElementById('btnStart');
   const btnCapture = document.getElementById('btnCapture');
   const btnRetake = document.getElementById('btnRetake');
   const btnOcr = document.getElementById('btnOcr');
   const btnSave = document.getElementById('btnSave');
+
   const camLog = document.getElementById('camLog');
   const rawText = document.getElementById('rawText');
   const saveMsg = document.getElementById('saveMsg');
+
   const $ = (id) => document.getElementById(id);
   const fields = { name: $('name'), phone: $('phone'), email: $('email'), address: $('address') };
 
   let stream = null, lastImageBlob = null, ocrText = "";
 
-  // Kamera aç
+  // Fallback: Dosya girişi ile kamera/galeri açtırma (mobilde kamera uygulamasını tetikler)
+  function useFileCaptureFallback(openPicker = false) {
+    btnCapture.disabled = false;
+    btnRetake.disabled = true;
+    btnOcr.disabled = true;
+
+    video.style.display = 'none';
+    preview.style.display = 'none';
+
+    fileInput.onchange = () => {
+      if (fileInput.files && fileInput.files[0]) {
+        const file = fileInput.files[0];
+        lastImageBlob = file;
+        preview.src = URL.createObjectURL(file);
+        preview.style.display = 'block';
+        btnRetake.disabled = false;
+        btnOcr.disabled = false;
+        camLog.textContent = "Fotoğraf yüklendi. OCR için hazır.";
+      }
+    };
+
+    if (openPicker) fileInput.click();
+    else camLog.innerHTML += ' <span class="hint">(“Fotoğraf Çek”e basınca kamera/galeri açılır.)</span>';
+  }
+
+  // Kamerayı aç (getUserMedia + fallback)
   btnStart.onclick = async () => {
     try {
-      if (stream) { stream.getTracks().forEach(t=>t.stop()); }
+      if (location.protocol !== 'https:') {
+        camLog.innerHTML = '<span class="err">HTTPS gerekli. Sayfayı https:// ile aç.</span>';
+        return useFileCaptureFallback();
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        camLog.innerHTML = '<span class="warn">Tarayıcı kamera API’sını desteklemiyor, fotoğraf yükleme moduna geçildi.</span>';
+        return useFileCaptureFallback();
+      }
+      // Instagram/TikTok/WhatsApp in-app browser’da sorun çıkabilir
+      // Mümkünse Safari/Chrome’da açın.
       stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
         audio: false
       });
       video.srcObject = stream;
+      video.setAttribute('playsinline', 'true'); // iOS tam ekran yapmasın
+      video.muted = true;
       await video.play();
+
       btnCapture.disabled = false;
       btnRetake.disabled = true;
       btnOcr.disabled = true;
+
       preview.style.display = 'none';
       canvas.style.display = 'none';
       video.style.display = 'block';
       camLog.textContent = "Kamera aktif.";
     } catch (err) {
-      camLog.innerHTML = `Kamera açılamadı: <span class="err">${err.message}</span>`;
+      camLog.innerHTML = `Kamera açılamadı: <span class="err">${err.message||err.name||'hata'}</span> — fotoğraf yükleme moduna geçiliyor.`;
+      useFileCaptureFallback();
     }
   };
 
-  // Fotoğraf çek
+  // Fotoğraf çek (fallback’te dosya seçtir)
   btnCapture.onclick = async () => {
-    if (!video.videoWidth) { camLog.textContent = "Kamera hazır değil."; return; }
+    if (!stream || !video.videoWidth) return useFileCaptureFallback(true);
+
     const w = video.videoWidth, h = video.videoHeight;
     canvas.width = w; canvas.height = h;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, w, h);
 
-    // Önizleme + blob
     canvas.toBlob((blob) => {
+      if (!blob) return;
       lastImageBlob = blob;
       preview.src = URL.createObjectURL(blob);
       preview.style.display = 'block';
@@ -188,12 +234,20 @@
     }, 'image/jpeg', 0.92);
   };
 
-  // Tekrar çek
+  // Tekrar çek (her iki modda da)
   btnRetake.onclick = () => {
     preview.style.display = 'none';
-    video.style.display = 'block';
-    btnOcr.disabled = true;
-    camLog.textContent = "Tekrar çekebilirsiniz.";
+    if (stream) {
+      video.style.display = 'block';
+      btnOcr.disabled = true;
+      camLog.textContent = "Tekrar çekebilirsiniz.";
+    } else {
+      // Fallback modda tekrar dosya seçtir
+      fileInput.value = '';
+      lastImageBlob = null;
+      btnOcr.disabled = true;
+      camLog.textContent = "Tekrar fotoğraf seçebilirsiniz.";
+    }
   };
 
   // Basit alan çıkarımı (TR ağırlıklı)
@@ -268,9 +322,10 @@
     }
   };
 
-  // Tarayıcı desteği kontrolü
+  // Tarayıcı desteği kontrolü — gerekirse otomatik fallback
   if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
-    camLog.innerHTML = '<span class="err">Tarayıcı kamera API’sını desteklemiyor.</span>';
+    camLog.innerHTML = '<span class="warn">Tarayıcı kamera API’sını yerel olarak göstermiyor, fotoğraf yükleme moduna geçildi.</span>';
+    useFileCaptureFallback();
   }
   </script>
 </body>
