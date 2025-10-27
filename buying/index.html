@@ -7,7 +7,8 @@
   <meta name="theme-color" content="#0ea5e9" />
   <style>
     :root { --bg:#0b1220; --fg:#eaf2ff; --muted:#9fb3c8; --brand:#0ea5e9; }
-    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
     header{padding:16px 20px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;gap:8px;align-items:center}
     header h1{margin:0;font-size:18px;font-weight:700}
     main{max-width:960px;margin:0 auto;padding:16px}
@@ -24,9 +25,34 @@
     .hint{color:var(--muted);font-size:13px}
     .ok{color:#22c55e}.warn{color:#f59e0b}.err{color:#ef4444}
     .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+
+    /* Logo overlay */
+    .overlay{
+      position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+      background:rgba(11,18,32,0.85); z-index:9999; transition:opacity .25s ease;
+    }
+    .overlay.hidden{opacity:0; pointer-events:none}
+    .logo-wrap{display:flex; flex-direction:column; align-items:center; gap:12px}
+    .logo{
+      width:140px; height:140px; object-fit:contain; filter:blur(1.5px) brightness(1.2);
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+    .logo.active{filter:blur(0.2px) brightness(1.0)}
+    @keyframes pulse{
+      0%{opacity:.55} 50%{opacity:1} 100%{opacity:.55}
+    }
   </style>
 </head>
 <body>
+  <!-- Bekleme/Çalışıyor overlay (logo) -->
+  <div id="overlay" class="overlay">
+    <div class="logo-wrap">
+      <!-- logoyu /buying/logso.png olarak koy -->
+      <img id="brandLogo" class="logo" src="logso.png" alt="Poler Oyuncak" />
+      <div class="hint">Hazır… Kamerayı açabilir veya fotoğraf yükleyebilirsin.</div>
+    </div>
+  </div>
+
   <header>
     <h1>Poler Oyuncak • Kartvizit Tara</h1>
     <span class="hint">/buying</span>
@@ -80,6 +106,13 @@
           </div>
         </div>
 
+        <div class="row" style="gap:12px;margin-top:8px">
+          <div style="flex:1">
+            <label for="contact">İlgili Kişi</label>
+            <input id="contact" placeholder="Ad Soyad / Ünvan" />
+          </div>
+        </div>
+
         <div class="row" style="margin-top:12px">
           <button id="btnOcr" class="ghost" disabled>OCR ile Doldur</button>
           <button id="btnSave" disabled>Kaydet</button>
@@ -121,15 +154,17 @@
     auth = firebase.auth();
     db = firebase.firestore();
     storage = firebase.storage();
-    // Anonim login
     auth.onAuthStateChanged(async (u) => {
       if (!u) await auth.signInAnonymously();
       uid = (auth.currentUser || u).uid;
-      document.getElementById('btnSave').disabled = false; // login tamam
+      document.getElementById('btnSave').disabled = false;
     });
   } catch (e) {
     console.warn("Firebase init edilemedi:", e);
   }
+
+  const overlay = document.getElementById('overlay');
+  const brandLogo = document.getElementById('brandLogo');
 
   const video = document.getElementById('video');
   const canvas = document.getElementById('canvas');
@@ -147,28 +182,21 @@
   const saveMsg = document.getElementById('saveMsg');
 
   const $ = (id) => document.getElementById(id);
-  const fields = { name: $('name'), phone: $('phone'), email: $('email'), address: $('address') };
+  const fields = { name: $('name'), phone: $('phone'), email: $('email'), address: $('address'), contact: $('contact') };
 
   let stream = null, lastImageBlob = null, ocrText = "";
 
-  // ---------- Normalizasyon & Yakalama Yardımcıları ----------
+  /* -------- Yardımcılar: normalizasyon / e-posta / tel / adres -------- */
   function normalizeOCRText(s) {
     if (!s) return "";
     return s
-      .replace(/[\u2010-\u2014]/g, "-")
-      .replace(/[“”„"]/g, '"')
-      .replace(/[’‘']/g, "'")
-      .replace(/\(at\)|\sat\s/gi, "@")
-      .replace(/\s*\[at\]\s*/gi, "@")
-      .replace(/\(dot\)|\sdot\s/gi, ".")
-      .replace(/\s*\[dot\]\s*/gi, ".")
+      .replace(/[\u2010-\u2014]/g, "-").replace(/[“”„"]/g, '"').replace(/[’‘']/g, "'")
+      .replace(/\(at\)|\sat\s/gi, "@").replace(/\s*\[at\]\s*/gi, "@")
+      .replace(/\(dot\)|\sdot\s/gi, ".").replace(/\s*\[dot\]\s*/gi, ".")
       .replace(/(\w),(\w)/g, "$1.$2")
-      .replace(/(\S)@(\s+)/g, "$1@")
-      .replace(/(\s+)@(\S)/g, "@$2")
-      .replace(/(?<=\w)0(?=\w)/g, "O")
-      .replace(/(?<=\b)O(?=\d)/g, "0")
-      .replace(/I(?=\d)/g, "1")
-      .replace(/l(?=\d)/g, "1");
+      .replace(/(\S)@(\s+)/g, "$1@").replace(/(\s+)@(\S)/g, "@$2")
+      .replace(/(?<=\w)0(?=\w)/g, "O").replace(/(?<=\b)O(?=\d)/g, "0")
+      .replace(/I(?=\d)/g, "1").replace(/l(?=\d)/g, "1");
   }
   function findEmails(text) {
     const t = normalizeOCRText(text||"");
@@ -181,15 +209,8 @@
     const re = /(?:\+?90[\s\-\.]?)?(?:0[\s\-\.]?)?(?:\(?\d{3}\)?[\s\-\.]?)\d{3}[\s\-\.]?\d{2}[\s\-\.]?\d{2}/g;
     const cand = t.match(re) || [];
     const cleaned = cand.map(x => x.replace(/[^\d+]/g, ""));
-    const valid = cleaned.filter(num => {
-      const d = num.replace(/\D/g,"");
-      return d.length >= 10 && d.length <= 12;
-    });
-    const scored = valid.map(v=>{
-      const d=v.replace(/\D/g,""); let s=d.length;
-      if (/^\+?90/.test(v) || /^0?5\d{2}/.test(v)) s+=5;
-      return {v,s};
-    }).sort((a,b)=>b.s-a.s);
+    const valid = cleaned.filter(num => { const d=num.replace(/\D/g,""); return d.length>=10 && d.length<=12; });
+    const scored = valid.map(v=>{ const d=v.replace(/\D/g,""); let s=d.length; if (/^\+?90/.test(v)||/^0?5\d{2}/.test(v)) s+=5; return {v,s}; }).sort((a,b)=>b.s-a.s);
     return scored.map(x=>x.v);
   }
   function findAddressLine(text) {
@@ -200,29 +221,20 @@
   }
   function pickBestEmail(emails) {
     if (!emails.length) return "";
-    emails.sort((a,b)=>{
-      const sc = e => (/\.com(\.tr)?$/i.test(e)?2:0) + (/@[a-z0-9\-]+/i.test(e)?1:0);
-      return sc(b)-sc(a);
-    });
+    emails.sort((a,b)=>{ const sc=e=>(/\.com(\.tr)?$/i.test(e)?2:0)+(/@[a-z0-9\-]+/i.test(e)?1:0); return sc(b)-sc(a); });
     return emails[0];
   }
   function pickBestPhone(phones) {
     if (!phones.length) return "";
-    phones.sort((a,b)=>{
-      const da=a.replace(/\D/g,"").length, db=b.replace(/\D/g,"").length;
-      const pa=(/^\+?90/.test(a)||/^0?5/.test(a))?2:0;
-      const pb=(/^\+?90/.test(b)||/^0?5/.test(b))?2:0;
-      return (db+pb)-(da+pa);
-    });
-    const d = phones[0].replace(/\D/g,"");
-    let out=d;
+    phones.sort((a,b)=>{ const da=a.replace(/\D/g,"").length, db=b.replace(/\D/g,"").length; const pa=(/^\+?90/.test(a)||/^0?5/.test(a))?2:0; const pb=(/^\+?90/.test(b)||/^0?5/.test(b))?2:0; return (db+pb)-(da+pa); });
+    const d = phones[0].replace(/\D/g,""); let out=d;
     if (d.length===12 && d.startsWith("90")) out=d.slice(2);
     if (out.length===11 && out.startsWith("0")) out=out.slice(1);
     if (out.length===10) return `0${out.slice(0,3)} ${out.slice(3,6)} ${out.slice(6,8)} ${out.slice(8,10)}`;
     return phones[0];
   }
 
-  // ---------- Görüntü Ön-işleme ----------
+  /* -------- Görüntü ön-işleme / ölçekleme / 180° -------- */
   async function preprocessForOCR(blob) {
     const img = await createImageBitmap(blob);
     const off = document.createElement('canvas');
@@ -233,20 +245,13 @@
     ctx.drawImage(img, 0, 0);
     let d = ctx.getImageData(0, 0, off.width, off.height);
     let px = d.data;
-    for (let i=0;i<px.length;i+=4){
-      const r=px[i], g=px[i+1], b=px[i+2];
-      const y=0.299*r+0.587*g+0.114*b;
-      px[i]=px[i+1]=px[i+2]=y;
-    }
+    for (let i=0;i<px.length;i+=4){ const r=px[i],g=px[i+1],b=px[i+2]; const y=0.299*r+0.587*g+0.114*b; px[i]=px[i+1]=px[i+2]=y; }
     ctx.putImageData(d,0,0);
 
     // contrast + gamma
     d=ctx.getImageData(0,0,off.width,off.height); px=d.data;
     const contrast=1.25, gamma=0.9;
-    for (let i=0;i<px.length;i+=4){
-      let v=px[i]/255; v=Math.pow(v,gamma); v=(v-0.5)*contrast+0.5; v=Math.max(0,Math.min(1,v));
-      const u=v*255|0; px[i]=px[i+1]=px[i+2]=u;
-    }
+    for (let i=0;i<px.length;i+=4){ let v=px[i]/255; v=Math.pow(v,gamma); v=(v-0.5)*contrast+0.5; v=Math.max(0,Math.min(1,v)); const u=v*255|0; px[i]=px[i+1]=px[i+2]=u; }
     ctx.putImageData(d,0,0);
 
     // simple adaptive threshold
@@ -274,8 +279,7 @@
   }
   async function scaleBlob(blob,factor=1.6){
     const bmp=await createImageBitmap(blob);
-    const c=document.createElement('canvas');
-    c.width=Math.round(bmp.width*factor); c.height=Math.round(bmp.height*factor);
+    const c=document.createElement('canvas'); c.width=Math.round(bmp.width*factor); c.height=Math.round(bmp.height*factor);
     const ctx=c.getContext('2d'); ctx.imageSmoothingEnabled=true; ctx.imageSmoothingQuality='high';
     ctx.drawImage(bmp,0,0,c.width,c.height);
     return await new Promise(res=>c.toBlob(res,'image/jpeg',0.95));
@@ -287,7 +291,7 @@
     return await new Promise(res=>c.toBlob(res,'image/jpeg',0.95));
   }
 
-  // ---------- İsim Seçici (bbox + güven) ----------
+  /* -------- Akıllı isim ve ilgili kişi seçimi -------- */
   function pickCompanyNameSmart(ocrData) {
     const lines = ocrData?.lines || [];
     if (!lines.length) return null;
@@ -298,46 +302,62 @@
       const allCaps = text===text.toUpperCase() && /[A-ZÇĞİÖŞÜ]/.test(text);
       const reasonable = text.length>=2 && text.length<=32;
       const brandy = /\b(ltd|anonim|a\.ş|aş|inc|ltd\.|limited|holding|oyuncak|plastic|gıda|tekstil)\b/i.test(text);
-      let s=0;
-      s+=(1000-Math.min(1000,yTop)); s+=h*2;
+      let s=0; s+=(1000-Math.min(1000,yTop)); s+=h*2;
       if(!hasDigit) s+=80; if(allCaps) s+=60; if(reasonable) s+=50; if(brandy) s+=40;
       if(/@/.test(text)||/(mah\.|cad\.|sok\.|no[:\s]|istanbul|ankara|izmir|bursa|kocaeli|antalya|adana|konya|gaziantep|kayseri|mersin|eskişehir)/i.test(text)||/(\+?90|0?\s?5\d{2})/.test(text)) s-=200;
       let avg=0,c=0; (L.words||[]).forEach(w=>{ if(typeof w.confidence==='number'){avg+=w.confidence;c++;}});
-      if(c) s+=(avg/c);
-      if(text.length>40) s-=60;
-      return s;
+      if(c) s+=(avg/c); if(text.length>40) s-=60; return s;
     }
-    const scored=lines.map(L=>({text:(L.text||"").trim(),score:scoreLine(L)})).filter(x=>x.text).sort((a,b)=>b.score-a.score);
+    const scored=(lines.map(L=>({text:(L.text||"").trim(),score:scoreLine(L)})).filter(x=>x.text)).sort((a,b)=>b.score-a.score);
     return scored[0]?.text||null;
   }
 
-  // ---------- Alan Çıkarımı ----------
-  function extractFields(allText, ocrData) {
-    const text = normalizeOCRText(allText||"");
-    const emails = findEmails(text);
-    const phones = findPhones(text);
-    const email = pickBestEmail(emails);
-    const phone = pickBestPhone(phones);
-    const address = findAddressLine(text);
-    let name = pickCompanyNameSmart(ocrData);
-    if (!name) {
-      const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-      name = lines.slice(0,5).find(l=>!/\d/.test(l)&&l.length<=32) || lines[0] || "";
-    }
-    return { name, phone, email, address };
+  function looksLikePersonName(line){
+    // Türkçe ad-soyad: 2-3 kelime, Baş Harf büyük, rakam yok, @ yok
+    if (!line || /[@\d]/.test(line)) return false;
+    const parts=line.trim().split(/\s+/);
+    if (parts.length<2 || parts.length>4) return false;
+    return parts.every(p => /^[A-ZÇĞİİÖŞÜ][a-zçğıiöşü'-]+$/.test(p));
   }
 
-  // ---------- Tek Geçiş & Multi-Pass OCR ----------
+  function pickContactPerson(ocrData, fullText){
+    // 1) Ünvan ipuçları olan satırlar
+    const keywords = /(ilgili|iletişim|contact|satış|sales|pazarlama|marketing|müdür|manager|owner|kurucu|genel müdür|director|representative|temsilci)/i;
+    const linesData = ocrData?.lines || [];
+    const byKW = linesData.map(l => (l.text||"").trim()).filter(t => keywords.test(t));
+    for (const t of byKW){
+      // aynı satırdan isim çekmeyi dene
+      const cand = t.replace(keywords, '').trim();
+      if (looksLikePersonName(cand)) return cand;
+    }
+    // 2) Kelimeleri bir önceki/sonraki satırla birlikte düşün
+    for (let i=0;i<linesData.length;i++){
+      const t=(linesData[i].text||"").trim();
+      if (keywords.test(t)){
+        const prev=(linesData[i-1]?.text||"").trim();
+        const next=(linesData[i+1]?.text||"").trim();
+        if (looksLikePersonName(prev)) return prev;
+        if (looksLikePersonName(next)) return next;
+      }
+    }
+    // 3) Genel satırlardan kişi adı kalıbına uyanı bul (e-posta/telefon/adres olmayan)
+    const plain = (fullText||"").split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+    for (const l of plain){
+      if (looksLikePersonName(l) && !/@/.test(l) && !/\d/.test(l) &&
+          !/(mah\.|cad\.|sok\.|no[:\s]|istanbul|ankara|izmir|bursa|kocaeli|antalya|adana|konya|gaziantep|kayseri|mersin|eskişehir)/i.test(l)) {
+        return l;
+      }
+    }
+    return "";
+  }
+
+  /* -------- Single & Multi-pass OCR -------- */
   async function ocrOnce(blob, logger){ const {data}=await Tesseract.recognize(blob,'tur+eng',{logger}); return data; }
   async function ocrMultiPass(blob, logger){
     const texts=[]; const datas=[];
-    // 1) ham
     const d1=await ocrOnce(blob,logger); texts.push(d1.text||""); datas.push(d1);
-    // 2) ön-işlenmiş
     try{ const pre=await preprocessForOCR(blob); const d2=await ocrOnce(pre,logger); texts.push(d2.text||""); datas.push(d2);}catch{}
-    // 3) büyütülmüş
     try{ const big=await scaleBlob(blob,1.6); const d3=await ocrOnce(big,logger); texts.push(d3.text||""); datas.push(d3);}catch{}
-    // 4) çok zayıfsa 180°
     if ((texts.join("\n").trim().length < 30)) {
       try{ const r=await rotateBlob180(blob); const d4=await ocrOnce(r,logger); texts.push(d4.text||""); datas.push(d4);}catch{}
     }
@@ -346,7 +366,7 @@
     return { fullText, bestData };
   }
 
-  // ---------- Fallback: Dosya girişi ile kamera/galeri ----------
+  /* -------- Fallback: Dosya girişi -------- */
   function useFileCaptureFallback(openPicker = false) {
     btnCapture.disabled = false;
     btnRetake.disabled = true;
@@ -364,6 +384,7 @@
         btnRetake.disabled = false;
         btnOcr.disabled = false;
         camLog.textContent = "Fotoğraf yüklendi. OCR için hazır.";
+        overlay.classList.add('hidden'); // resim var, bekleme kalksın
       }
     };
 
@@ -371,7 +392,7 @@
     else camLog.innerHTML += ' <span class="hint">(“Fotoğraf Çek”e basınca kamera/galeri açılır.)</span>';
   }
 
-  // ---------- Kamerayı aç (getUserMedia + fallback) ----------
+  /* -------- Kamera aç -------- */
   btnStart.onclick = async () => {
     try {
       if (location.protocol !== 'https:') {
@@ -399,13 +420,14 @@
       canvas.style.display = 'none';
       video.style.display = 'block';
       camLog.textContent = "Kamera aktif.";
+      overlay.classList.add('hidden'); // kamera açıldıysa bekleme kalksın
     } catch (err) {
       camLog.innerHTML = `Kamera açılamadı: <span class="err">${err.message||err.name||'hata'}</span> — fotoğraf yükleme moduna geçiliyor.`;
       useFileCaptureFallback();
     }
   };
 
-  // ---------- Fotoğraf çek (fallback’te dosya seçtir) ----------
+  /* -------- Fotoğraf çek -------- */
   btnCapture.onclick = async () => {
     if (!stream || !video.videoWidth) return useFileCaptureFallback(true);
 
@@ -427,7 +449,7 @@
     }, 'image/jpeg', 0.92);
   };
 
-  // ---------- Tekrar çek ----------
+  /* -------- Tekrar çek -------- */
   btnRetake.onclick = () => {
     preview.style.display = 'none';
     if (stream) {
@@ -442,10 +464,14 @@
     }
   };
 
-  // ---------- OCR (Multi-Pass + Akıllı İsim + Güçlü E-posta/Telefon) ----------
+  /* -------- OCR (multi-pass) -------- */
   btnOcr.onclick = async () => {
     if (!lastImageBlob) return;
     btnOcr.disabled = true; btnOcr.textContent = "OCR çalışıyor...";
+    // logo “netleşsin”
+    brandLogo.classList.add('active');
+    overlay.classList.remove('hidden');
+
     try {
       const { fullText, bestData } = await ocrMultiPass(lastImageBlob, m => {
         camLog.textContent = `OCR: ${m.status} ${Math.round((m.progress||0)*100)}%`;
@@ -454,21 +480,18 @@
       ocrText = fullText.trim();
       rawText.textContent = ocrText || "(metin bulunamadı)";
 
-      const info = extractFields(ocrText, bestData);
-      fields.name.value = info.name || fields.name.value;
-      fields.phone.value = info.phone || fields.phone.value;
-      fields.email.value = info.email || fields.email.value;
-      fields.address.value = info.address || fields.address.value;
+      // Alanlar
+      const emails = findEmails(ocrText);
+      const phones = findPhones(ocrText);
+      const address = findAddressLine(ocrText);
+      const nameSmart = pickCompanyNameSmart(bestData);
+      const contactSmart = pickContactPerson(bestData, ocrText);
 
-      // Eğer email/telefon hala boşsa, ham datanın words/lines'ından yeniden taramaya çalış (ek dayanıklılık)
-      if (!fields.email.value) {
-        const alt = pickBestEmail(findEmails(bestData.text || ""));
-        if (alt) fields.email.value = alt;
-      }
-      if (!fields.phone.value) {
-        const altP = pickBestPhone(findPhones(bestData.text || ""));
-        if (altP) fields.phone.value = altP;
-      }
+      if (nameSmart) fields.name.value = nameSmart;
+      if (!fields.email.value) fields.email.value = pickBestEmail(emails);
+      if (!fields.phone.value) fields.phone.value = pickBestPhone(phones);
+      if (!fields.address.value) fields.address.value = address;
+      if (!fields.contact.value) fields.contact.value = contactSmart;
 
       btnSave.disabled = false;
       camLog.innerHTML = `OCR tamam: <span class="ok">alanlar dolduruldu</span>`;
@@ -477,10 +500,13 @@
     } finally {
       btnOcr.textContent = "OCR ile Doldur";
       btnOcr.disabled = false;
+      // logo tekrar “bekleme” durumuna dönsün
+      brandLogo.classList.remove('active');
+      overlay.classList.add('hidden');
     }
   };
 
-  // ---------- Kaydet → Firebase Storage + Firestore ----------
+  /* -------- Kaydet (Firestore + Storage) -------- */
   btnSave.onclick = async () => {
     if (!db || !storage || !uid) { saveMsg.innerHTML = '<span class="warn">Firebase yapılandır.</span>'; return; }
     if (!fields.name.value.trim()) { saveMsg.innerHTML = '<span class="warn">Şirket adı zorunlu.</span>'; return; }
@@ -500,6 +526,7 @@
         phone: fields.phone.value.trim() || null,
         email: fields.email.value.trim() || null,
         address: fields.address.value.trim() || null,
+        contactPerson: fields.contact.value.trim() || null,
         cardImageUrl: imageUrl,
         owner: uid,
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -517,7 +544,7 @@
     }
   };
 
-  // ---------- Tarayıcı desteği kontrolü — gerekirse otomatik fallback ----------
+  /* -------- İlk açılışta bekleme overlay'i kalsın; destek yoksa fallback -------- */
   if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
     camLog.innerHTML = '<span class="warn">Tarayıcı kamera API’sını yerel olarak göstermiyor, fotoğraf yükleme moduna geçildi.</span>';
     useFileCaptureFallback();
