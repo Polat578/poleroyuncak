@@ -103,7 +103,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
 
   <script>
-  // --------- Firebase Config (senin uygulamandan) ----------
+  // --------- Firebase Config ----------
   const firebaseConfig = {
     apiKey: "AIzaSyD4MPM2fvkTXeOWG12g-wV_s3eG4SkBWS0",
     authDomain: "poleroyuncak.firebaseapp.com",
@@ -113,7 +113,7 @@
     appId: "1:473844630811:web:721ebd8a9b6f085da03fbe",
     measurementId: "G-JNQTNX3EC4"
   };
-  // ---------------------------------------------------------
+  // ------------------------------------
 
   let app, auth, db, storage, uid = null;
   try {
@@ -128,7 +128,7 @@
       document.getElementById('btnSave').disabled = false; // login tamam
     });
   } catch (e) {
-    console.warn("Firebase init edilemedi (config girilmemiş olabilir):", e);
+    console.warn("Firebase init edilemedi:", e);
   }
 
   const video = document.getElementById('video');
@@ -151,121 +151,199 @@
 
   let stream = null, lastImageBlob = null, ocrText = "";
 
-  // ---------- Görüntü ön-işleme (grayscale + kontrast + basit adaptive threshold) ----------
+  // ---------- Normalizasyon & Yakalama Yardımcıları ----------
+  function normalizeOCRText(s) {
+    if (!s) return "";
+    return s
+      .replace(/[\u2010-\u2014]/g, "-")
+      .replace(/[“”„"]/g, '"')
+      .replace(/[’‘']/g, "'")
+      .replace(/\(at\)|\sat\s/gi, "@")
+      .replace(/\s*\[at\]\s*/gi, "@")
+      .replace(/\(dot\)|\sdot\s/gi, ".")
+      .replace(/\s*\[dot\]\s*/gi, ".")
+      .replace(/(\w),(\w)/g, "$1.$2")
+      .replace(/(\S)@(\s+)/g, "$1@")
+      .replace(/(\s+)@(\S)/g, "@$2")
+      .replace(/(?<=\w)0(?=\w)/g, "O")
+      .replace(/(?<=\b)O(?=\d)/g, "0")
+      .replace(/I(?=\d)/g, "1")
+      .replace(/l(?=\d)/g, "1");
+  }
+  function findEmails(text) {
+    const t = normalizeOCRText(text||"");
+    const re = /[A-Z0-9._%+-]+(?:\s*@\s*|@)[A-Z0-9.-]+(?:\s*\.\s*|\.)[A-Z]{2,}/gi;
+    const out = (t.match(re) || []).map(e => e.replace(/\s*@\s*/g,"@").replace(/\s*\.\s*/g,"."));
+    return [...new Set(out)];
+  }
+  function findPhones(text) {
+    let t = normalizeOCRText(text||"");
+    const re = /(?:\+?90[\s\-\.]?)?(?:0[\s\-\.]?)?(?:\(?\d{3}\)?[\s\-\.]?)\d{3}[\s\-\.]?\d{2}[\s\-\.]?\d{2}/g;
+    const cand = t.match(re) || [];
+    const cleaned = cand.map(x => x.replace(/[^\d+]/g, ""));
+    const valid = cleaned.filter(num => {
+      const d = num.replace(/\D/g,"");
+      return d.length >= 10 && d.length <= 12;
+    });
+    const scored = valid.map(v=>{
+      const d=v.replace(/\D/g,""); let s=d.length;
+      if (/^\+?90/.test(v) || /^0?5\d{2}/.test(v)) s+=5;
+      return {v,s};
+    }).sort((a,b)=>b.s-a.s);
+    return scored.map(x=>x.v);
+  }
+  function findAddressLine(text) {
+    const lines = (text||"").split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+    return lines.find(l =>
+      /mah\.|mh\.|cad\.|cd\.|sok\.|sk\.|no[:\s]|ilçe|istanbul|ankara|izmir|bursa|kocaeli|antalya|adana|konya|gaziantep|kayseri|mersin|eskişehir/i.test(l)
+    ) || "";
+  }
+  function pickBestEmail(emails) {
+    if (!emails.length) return "";
+    emails.sort((a,b)=>{
+      const sc = e => (/\.com(\.tr)?$/i.test(e)?2:0) + (/@[a-z0-9\-]+/i.test(e)?1:0);
+      return sc(b)-sc(a);
+    });
+    return emails[0];
+  }
+  function pickBestPhone(phones) {
+    if (!phones.length) return "";
+    phones.sort((a,b)=>{
+      const da=a.replace(/\D/g,"").length, db=b.replace(/\D/g,"").length;
+      const pa=(/^\+?90/.test(a)||/^0?5/.test(a))?2:0;
+      const pb=(/^\+?90/.test(b)||/^0?5/.test(b))?2:0;
+      return (db+pb)-(da+pa);
+    });
+    const d = phones[0].replace(/\D/g,"");
+    let out=d;
+    if (d.length===12 && d.startsWith("90")) out=d.slice(2);
+    if (out.length===11 && out.startsWith("0")) out=out.slice(1);
+    if (out.length===10) return `0${out.slice(0,3)} ${out.slice(3,6)} ${out.slice(6,8)} ${out.slice(8,10)}`;
+    return phones[0];
+  }
+
+  // ---------- Görüntü Ön-işleme ----------
   async function preprocessForOCR(blob) {
     const img = await createImageBitmap(blob);
     const off = document.createElement('canvas');
     off.width = img.width; off.height = img.height;
     const ctx = off.getContext('2d');
 
-    // 1) gri ton
+    // grayscale
     ctx.drawImage(img, 0, 0);
     let d = ctx.getImageData(0, 0, off.width, off.height);
     let px = d.data;
-    for (let i=0; i<px.length; i+=4) {
+    for (let i=0;i<px.length;i+=4){
       const r=px[i], g=px[i+1], b=px[i+2];
-      const y = 0.299*r + 0.587*g + 0.114*b;
+      const y=0.299*r+0.587*g+0.114*b;
       px[i]=px[i+1]=px[i+2]=y;
     }
-    ctx.putImageData(d, 0, 0);
+    ctx.putImageData(d,0,0);
 
-    // 2) kontrast (1.25x) + gamma (0.9)
-    d = ctx.getImageData(0, 0, off.width, off.height);
-    px = d.data;
-    const contrast = 1.25, gamma = 0.9;
-    for (let i=0; i<px.length; i+=4) {
-      let v = px[i]/255;
-      v = Math.pow(v, gamma);
-      v = (v - 0.5) * contrast + 0.5;
-      v = Math.max(0, Math.min(1, v));
-      const u = v*255|0;
-      px[i]=px[i+1]=px[i+2]=u;
+    // contrast + gamma
+    d=ctx.getImageData(0,0,off.width,off.height); px=d.data;
+    const contrast=1.25, gamma=0.9;
+    for (let i=0;i<px.length;i+=4){
+      let v=px[i]/255; v=Math.pow(v,gamma); v=(v-0.5)*contrast+0.5; v=Math.max(0,Math.min(1,v));
+      const u=v*255|0; px[i]=px[i+1]=px[i+2]=u;
     }
-    ctx.putImageData(d, 0, 0);
+    ctx.putImageData(d,0,0);
 
-    // 3) basit adaptive threshold
-    const block = Math.max(15, Math.round(Math.min(off.width, off.height)/40));
-    const rad = block|0;
-    d = ctx.getImageData(0, 0, off.width, off.height);
-    px = d.data;
-    for (let y=0; y<off.height; y++) {
-      for (let x=0; x<off.width; x++) {
-        let sum=0, cnt=0;
-        for (let yy=y-rad; yy<=y+rad; yy+=rad) {
+    // simple adaptive threshold
+    const block=Math.max(15,Math.round(Math.min(off.width,off.height)/40));
+    const rad=block|0;
+    d=ctx.getImageData(0,0,off.width,off.height); px=d.data;
+    for (let y=0;y<off.height;y++){
+      for (let x=0;x<off.width;x++){
+        let sum=0,cnt=0;
+        for (let yy=y-rad;yy<=y+rad;yy+=rad){
           if (yy<0||yy>=off.height) continue;
-          for (let xx=x-rad; xx<=x+rad; xx+=rad) {
+          for (let xx=x-rad;xx<=x+rad;xx+=rad){
             if (xx<0||xx>=off.width) continue;
-            const idx=(yy*off.width+xx)*4;
-            sum += px[idx];
-            cnt++;
+            const idx=(yy*off.width+xx)*4; sum+=px[idx]; cnt++;
           }
         }
-        const idx=(y*off.width+x)*4;
-        const mean = sum/(cnt||1);
-        const val = px[idx] < (mean-8) ? 0 : 255;
+        const idx=(y*off.width+x)*4; const mean=sum/(cnt||1);
+        const val=px[idx] < (mean-8) ? 0 : 255;
         px[idx]=px[idx+1]=px[idx+2]=val;
       }
     }
-    ctx.putImageData(d, 0, 0);
+    ctx.putImageData(d,0,0);
 
-    return await new Promise(res => off.toBlob(res, 'image/png', 1.0));
+    return await new Promise(res=>off.toBlob(res,'image/png',1.0));
+  }
+  async function scaleBlob(blob,factor=1.6){
+    const bmp=await createImageBitmap(blob);
+    const c=document.createElement('canvas');
+    c.width=Math.round(bmp.width*factor); c.height=Math.round(bmp.height*factor);
+    const ctx=c.getContext('2d'); ctx.imageSmoothingEnabled=true; ctx.imageSmoothingQuality='high';
+    ctx.drawImage(bmp,0,0,c.width,c.height);
+    return await new Promise(res=>c.toBlob(res,'image/jpeg',0.95));
+  }
+  async function rotateBlob180(blob){
+    const bmp=await createImageBitmap(blob);
+    const c=document.createElement('canvas'); c.width=bmp.width; c.height=bmp.height;
+    const ctx=c.getContext('2d'); ctx.translate(c.width,c.height); ctx.rotate(Math.PI); ctx.drawImage(bmp,0,0);
+    return await new Promise(res=>c.toBlob(res,'image/jpeg',0.95));
   }
 
-  // ---------- Akıllı isim seçici: bbox + güvene göre skorla ----------
+  // ---------- İsim Seçici (bbox + güven) ----------
   function pickCompanyNameSmart(ocrData) {
     const lines = ocrData?.lines || [];
     if (!lines.length) return null;
-
-    function scoreLine(L) {
-      const text = (L.text || "").trim();
-      if (!text) return -1e9;
-      const hasDigit = /\d/.test(text);
-      const { x0=0, y0=0, x1=0, y1=0 } = L.bbox || {};
-      const h = Math.max(1, (y1 - y0));
-      const yTop = y0;
-      const allCaps = text === text.toUpperCase() && /[A-ZÇĞİÖŞÜ]/.test(text);
-      const reasonableLen = text.length >= 2 && text.length <= 32;
+    function scoreLine(L){
+      const text=(L.text||"").trim(); if (!text) return -1e9;
+      const hasDigit=/\d/.test(text);
+      const {x0=0,y0=0,x1=0,y1=0}=L.bbox||{}; const h=Math.max(1,(y1-y0)); const yTop=y0;
+      const allCaps = text===text.toUpperCase() && /[A-ZÇĞİÖŞÜ]/.test(text);
+      const reasonable = text.length>=2 && text.length<=32;
       const brandy = /\b(ltd|anonim|a\.ş|aş|inc|ltd\.|limited|holding|oyuncak|plastic|gıda|tekstil)\b/i.test(text);
-
-      let s = 0;
-      s += (1000 - Math.min(1000, yTop)); // üstte olana puan
-      s += h * 2;                         // büyük punto/logoya yakın
-      if (!hasDigit) s += 80;
-      if (allCaps) s += 60;
-      if (reasonableLen) s += 50;
-      if (brandy) s += 40;
-
-      if (/@/.test(text) || /(mah\.|cad\.|sok\.|no[:\s]|istanbul|ankara|izmir|bursa|kocaeli|antalya|adana|konya|gaziantep|kayseri|mersin|eskişehir)/i.test(text) || /(\+?90|0?\s?5\d{2})/.test(text)) {
-        s -= 200; // iletişim/adres satırlarını bastır
-      }
-
-      let avgConf = 0, cCount = 0;
-      (L.words || []).forEach(w => { if (typeof w.confidence === 'number') { avgConf += w.confidence; cCount++; }});
-      if (cCount) s += (avgConf / cCount);
-
-      if (text.length > 40) s -= 60;
+      let s=0;
+      s+=(1000-Math.min(1000,yTop)); s+=h*2;
+      if(!hasDigit) s+=80; if(allCaps) s+=60; if(reasonable) s+=50; if(brandy) s+=40;
+      if(/@/.test(text)||/(mah\.|cad\.|sok\.|no[:\s]|istanbul|ankara|izmir|bursa|kocaeli|antalya|adana|konya|gaziantep|kayseri|mersin|eskişehir)/i.test(text)||/(\+?90|0?\s?5\d{2})/.test(text)) s-=200;
+      let avg=0,c=0; (L.words||[]).forEach(w=>{ if(typeof w.confidence==='number'){avg+=w.confidence;c++;}});
+      if(c) s+=(avg/c);
+      if(text.length>40) s-=60;
       return s;
     }
-
-    const scored = lines
-      .map(L => ({ text: (L.text||"").trim(), bbox: L.bbox, score: scoreLine(L) }))
-      .filter(x => x.text);
-
-    scored.sort((a,b) => b.score - a.score);
-    return scored[0]?.text || null;
+    const scored=lines.map(L=>({text:(L.text||"").trim(),score:scoreLine(L)})).filter(x=>x.text).sort((a,b)=>b.score-a.score);
+    return scored[0]?.text||null;
   }
 
-  // ---------- Alan çıkarımı (smart name ile) ----------
-  function extractFields(text, ocrData) {
-    const email = (text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)||[])[0]||"";
-    const tel = (text.match(/(\+?90[\s\-]?)?0?\s?5\d{2}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}|(\+?90[\s\-]?)?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}/)||[])[0]||"";
-    const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-    const addrLine = lines.find(l => /mah\.|mh\.|cad\.|cd\.|sok\.|sk\.|no[:\s]|ilçe|istanbul|ankara|izmir|bursa|kocaeli|antalya|adana|konya|gaziantep|kayseri|mersin|eskişehir/i.test(l)) || "";
+  // ---------- Alan Çıkarımı ----------
+  function extractFields(allText, ocrData) {
+    const text = normalizeOCRText(allText||"");
+    const emails = findEmails(text);
+    const phones = findPhones(text);
+    const email = pickBestEmail(emails);
+    const phone = pickBestPhone(phones);
+    const address = findAddressLine(text);
+    let name = pickCompanyNameSmart(ocrData);
+    if (!name) {
+      const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+      name = lines.slice(0,5).find(l=>!/\d/.test(l)&&l.length<=32) || lines[0] || "";
+    }
+    return { name, phone, email, address };
+  }
 
-    let smart = pickCompanyNameSmart(ocrData);
-    if (!smart) smart = lines.slice(0,5).find(l => !/\d/.test(l) && l.length<=32) || lines[0] || "";
-
-    return { name: smart, phone: tel, email: email, address: addrLine };
+  // ---------- Tek Geçiş & Multi-Pass OCR ----------
+  async function ocrOnce(blob, logger){ const {data}=await Tesseract.recognize(blob,'tur+eng',{logger}); return data; }
+  async function ocrMultiPass(blob, logger){
+    const texts=[]; const datas=[];
+    // 1) ham
+    const d1=await ocrOnce(blob,logger); texts.push(d1.text||""); datas.push(d1);
+    // 2) ön-işlenmiş
+    try{ const pre=await preprocessForOCR(blob); const d2=await ocrOnce(pre,logger); texts.push(d2.text||""); datas.push(d2);}catch{}
+    // 3) büyütülmüş
+    try{ const big=await scaleBlob(blob,1.6); const d3=await ocrOnce(big,logger); texts.push(d3.text||""); datas.push(d3);}catch{}
+    // 4) çok zayıfsa 180°
+    if ((texts.join("\n").trim().length < 30)) {
+      try{ const r=await rotateBlob180(blob); const d4=await ocrOnce(r,logger); texts.push(d4.text||""); datas.push(d4);}catch{}
+    }
+    const fullText = texts.map(t=>normalizeOCRText(t)).join("\n");
+    const bestData = datas.sort((a,b)=>(b.lines?.length||0)-(a.lines?.length||0))[0] || d1;
+    return { fullText, bestData };
   }
 
   // ---------- Fallback: Dosya girişi ile kamera/galeri ----------
@@ -309,7 +387,7 @@
         audio: false
       });
       video.srcObject = stream;
-      video.setAttribute('playsinline', 'true'); // iOS tam ekran yapmasın
+      video.setAttribute('playsinline','true');
       video.muted = true;
       await video.play();
 
@@ -364,24 +442,33 @@
     }
   };
 
-  // ---------- OCR (ön-işleme + data.lines/words ile akıllı isim) ----------
+  // ---------- OCR (Multi-Pass + Akıllı İsim + Güçlü E-posta/Telefon) ----------
   btnOcr.onclick = async () => {
     if (!lastImageBlob) return;
     btnOcr.disabled = true; btnOcr.textContent = "OCR çalışıyor...";
     try {
-      const pre = await preprocessForOCR(lastImageBlob);
-      const { data } = await Tesseract.recognize(pre, 'tur+eng', {
-        logger: m => { camLog.textContent = `OCR: ${m.status} ${Math.round((m.progress||0)*100)}%`; }
+      const { fullText, bestData } = await ocrMultiPass(lastImageBlob, m => {
+        camLog.textContent = `OCR: ${m.status} ${Math.round((m.progress||0)*100)}%`;
       });
 
-      ocrText = (data.text || "").trim();
+      ocrText = fullText.trim();
       rawText.textContent = ocrText || "(metin bulunamadı)";
 
-      const info = extractFields(ocrText, data);
-      fields.name.value = info.name;
-      fields.phone.value = info.phone;
-      fields.email.value = info.email;
-      fields.address.value = info.address;
+      const info = extractFields(ocrText, bestData);
+      fields.name.value = info.name || fields.name.value;
+      fields.phone.value = info.phone || fields.phone.value;
+      fields.email.value = info.email || fields.email.value;
+      fields.address.value = info.address || fields.address.value;
+
+      // Eğer email/telefon hala boşsa, ham datanın words/lines'ından yeniden taramaya çalış (ek dayanıklılık)
+      if (!fields.email.value) {
+        const alt = pickBestEmail(findEmails(bestData.text || ""));
+        if (alt) fields.email.value = alt;
+      }
+      if (!fields.phone.value) {
+        const altP = pickBestPhone(findPhones(bestData.text || ""));
+        if (altP) fields.phone.value = altP;
+      }
 
       btnSave.disabled = false;
       camLog.innerHTML = `OCR tamam: <span class="ok">alanlar dolduruldu</span>`;
