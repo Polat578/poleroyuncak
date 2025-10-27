@@ -26,12 +26,13 @@
     .ok{color:#22c55e}.warn{color:#f59e0b}.err{color:#ef4444}
     .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
 
-    /* ====== Logo overlay & animasyon ====== */
+    /* ====== Logo overlay: varsayılan KAPALI ====== */
     .overlay{
       position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
-      background:rgba(11,18,32,0.85); z-index:9999; transition:opacity .25s ease;
+      background:rgba(11,18,32,0.85); z-index:9999;
+      opacity:0; pointer-events:none; transition:opacity .2s ease;
     }
-    .overlay.hidden{opacity:0; pointer-events:none}
+    .overlay.active{ opacity:1; pointer-events:auto; }
     .logo-wrap{display:flex; flex-direction:column; align-items:center; gap:12px}
     .logo{
       width:140px; height:140px; object-fit:contain;
@@ -55,12 +56,11 @@
   </style>
 </head>
 <body>
-  <!-- Bekleme/Çalışıyor overlay (logo) -->
+  <!-- Overlay BAŞLANGIÇTA gizli (active sınıfı YOK) -->
   <div id="overlay" class="overlay">
     <div class="logo-wrap">
-      <!-- logoyu /buying/logso.png olarak koy -->
       <img id="brandLogo" class="logo" src="logso.png" alt="Poler Oyuncak" />
-      <div class="hint" id="overlayHint">Hazır… Kamerayı açabilir veya fotoğraf yükleyebilirsin.</div>
+      <div class="hint" id="overlayHint">OCR çalışıyor…</div>
     </div>
   </div>
 
@@ -84,7 +84,6 @@
           <video id="video" playsinline muted></video>
           <canvas id="canvas" style="display:none"></canvas>
           <img id="preview" alt="Önizleme" style="display:none"/>
-          <!-- Fallback için gizli file input -->
           <input id="fileInput" type="file" accept="image/*" capture="environment" style="display:none" />
         </div>
         <p class="hint mono" id="camLog"></p>
@@ -140,14 +139,14 @@
 
   <!-- Tesseract.js (OCR) -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <!-- Firebase (compat SDK'ler – vanilla JS için basit) -->
+  <!-- Firebase (compat) -->
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
 
   <script>
-  // --------- Firebase Config ----------
+  /* ===== Firebase ===== */
   const firebaseConfig = {
     apiKey: "AIzaSyD4MPM2fvkTXeOWG12g-wV_s3eG4SkBWS0",
     authDomain: "poleroyuncak.firebaseapp.com",
@@ -157,8 +156,6 @@
     appId: "1:473844630811:web:721ebd8a9b6f085da03fbe",
     measurementId: "G-JNQTNX3EC4"
   };
-  // ------------------------------------
-
   let app, auth, db, storage, uid = null;
   try {
     app = firebase.initializeApp(firebaseConfig);
@@ -170,10 +167,9 @@
       uid = (auth.currentUser || u).uid;
       document.getElementById('btnSave').disabled = false;
     });
-  } catch (e) {
-    console.warn("Firebase init edilemedi:", e);
-  }
+  } catch (e) { console.warn("Firebase init edilemedi:", e); }
 
+  /* ===== Elemanlar ===== */
   const overlay = document.getElementById('overlay');
   const brandLogo = document.getElementById('brandLogo');
   const overlayHint = document.getElementById('overlayHint');
@@ -197,8 +193,9 @@
   const fields = { name: $('name'), phone: $('phone'), email: $('email'), address: $('address'), contact: $('contact') };
 
   let stream = null, lastImageBlob = null, ocrText = "";
+  let overlayTimeout = null;
 
-  /* -------- Normalizasyon & Yakalama -------- */
+  /* ===== Yardımcılar (normalize, find, preprocess vs.) ===== */
   function normalizeOCRText(s) {
     if (!s) return "";
     return s
@@ -246,27 +243,20 @@
     return phones[0];
   }
 
-  /* -------- Görüntü ön-işleme / ölçekleme / 180° -------- */
   async function preprocessForOCR(blob) {
     const img = await createImageBitmap(blob);
     const off = document.createElement('canvas');
     off.width = img.width; off.height = img.height;
     const ctx = off.getContext('2d');
-
-    // grayscale
     ctx.drawImage(img, 0, 0);
     let d = ctx.getImageData(0, 0, off.width, off.height);
     let px = d.data;
     for (let i=0;i<px.length;i+=4){ const r=px[i],g=px[i+1],b=px[i+2]; const y=0.299*r+0.587*g+0.114*b; px[i]=px[i+1]=px[i+2]=y; }
     ctx.putImageData(d,0,0);
-
-    // contrast + gamma
     d=ctx.getImageData(0,0,off.width,off.height); px=d.data;
     const contrast=1.25, gamma=0.9;
     for (let i=0;i<px.length;i+=4){ let v=px[i]/255; v=Math.pow(v,gamma); v=(v-0.5)*contrast+0.5; v=Math.max(0,Math.min(1,v)); const u=v*255|0; px[i]=px[i+1]=px[i+2]=u; }
     ctx.putImageData(d,0,0);
-
-    // simple adaptive threshold
     const block=Math.max(15,Math.round(Math.min(off.width,off.height)/40));
     const rad=block|0;
     d=ctx.getImageData(0,0,off.width,off.height); px=d.data;
@@ -286,7 +276,6 @@
       }
     }
     ctx.putImageData(d,0,0);
-
     return await new Promise(res=>off.toBlob(res,'image/png',1.0));
   }
   async function scaleBlob(blob,factor=1.6){
@@ -303,7 +292,6 @@
     return await new Promise(res=>c.toBlob(res,'image/jpeg',0.95));
   }
 
-  /* -------- Akıllı isim & ilgili kişi -------- */
   function pickCompanyNameSmart(ocrData) {
     const lines = ocrData?.lines || [];
     if (!lines.length) return null;
@@ -330,15 +318,11 @@
     if (parts.length<2 || parts.length>4) return false;
     return parts.every(p => /^[A-ZÇĞİİÖŞÜ][a-zçğıiöşü'-]+$/.test(p));
   }
-
   function pickContactPerson(ocrData, fullText){
     const keywords = /(ilgili|iletişim|contact|satış|sales|pazarlama|marketing|müdür|manager|owner|kurucu|genel müdür|director|representative|temsilci)/i;
     const linesData = ocrData?.lines || [];
     const byKW = linesData.map(l => (l.text||"").trim()).filter(t => keywords.test(t));
-    for (const t of byKW){
-      const cand = t.replace(keywords, '').trim();
-      if (looksLikePersonName(cand)) return cand;
-    }
+    for (const t of byKW){ const cand = t.replace(keywords, '').trim(); if (looksLikePersonName(cand)) return cand; }
     for (let i=0;i<linesData.length;i++){
       const t=(linesData[i].text||"").trim();
       if (keywords.test(t)){
@@ -358,7 +342,6 @@
     return "";
   }
 
-  /* -------- Single & Multi-pass OCR -------- */
   async function ocrOnce(blob, logger){ const {data}=await Tesseract.recognize(blob,'tur+eng',{logger}); return data; }
   async function ocrMultiPass(blob, logger){
     const texts=[]; const datas=[];
@@ -373,7 +356,7 @@
     return { fullText, bestData };
   }
 
-  /* -------- Fallback: Dosya girişi -------- */
+  /* ===== Fallback: Dosya ===== */
   function useFileCaptureFallback(openPicker = false) {
     btnCapture.disabled = false;
     btnRetake.disabled = true;
@@ -391,7 +374,7 @@
         btnRetake.disabled = false;
         btnOcr.disabled = false;
         camLog.textContent = "Fotoğraf yüklendi. OCR için hazır.";
-        overlay.classList.add('hidden');
+        hideOverlay(); // asla bloklamasın
       }
     };
 
@@ -399,7 +382,21 @@
     else camLog.innerHTML += ' <span class="hint">(“Fotoğraf Çek”e basınca kamera/galeri açılır.)</span>';
   }
 
-  /* -------- Kamera aç -------- */
+  /* ===== Overlay kontrol ===== */
+  function showOverlay() {
+    // zaten görünüyorsa yeniden başlatma
+    brandLogo.classList.add('loading');
+    overlay.classList.add('active');
+    clearTimeout(overlayTimeout);
+    overlayTimeout = setTimeout(hideOverlay, 30000); // 30 sn güvenlik
+  }
+  function hideOverlay() {
+    brandLogo.classList.remove('loading');
+    overlay.classList.remove('active');
+    clearTimeout(overlayTimeout);
+  }
+
+  /* ===== Kamera ===== */
   btnStart.onclick = async () => {
     try {
       if (location.protocol !== 'https:') {
@@ -427,14 +424,14 @@
       canvas.style.display = 'none';
       video.style.display = 'block';
       camLog.textContent = "Kamera aktif.";
-      overlay.classList.add('hidden'); // kamera açıldıysa bekleme kalksın
+      hideOverlay(); // kamera açıldı, engel yok
     } catch (err) {
       camLog.innerHTML = `Kamera açılamadı: <span class="err">${err.message||err.name||'hata'}</span> — fotoğraf yükleme moduna geçiliyor.`;
       useFileCaptureFallback();
     }
   };
 
-  /* -------- Fotoğraf çek -------- */
+  /* ===== Çekim ===== */
   btnCapture.onclick = async () => {
     if (!stream || !video.videoWidth) return useFileCaptureFallback(true);
 
@@ -453,10 +450,11 @@
       btnRetake.disabled = false;
       btnOcr.disabled = false;
       camLog.textContent = "Fotoğraf alındı. OCR için hazır.";
+      hideOverlay(); // engelleme yok
     }, 'image/jpeg', 0.92);
   };
 
-  /* -------- Tekrar çek -------- */
+  /* ===== Tekrar çek ===== */
   btnRetake.onclick = () => {
     preview.style.display = 'none';
     if (stream) {
@@ -469,16 +467,15 @@
       btnOcr.disabled = true;
       camLog.textContent = "Tekrar fotoğraf seçebilirsiniz.";
     }
+    hideOverlay();
   };
 
-  /* -------- OCR (multi-pass) + net–soluk logo -------- */
+  /* ===== OCR ===== */
   btnOcr.onclick = async () => {
     if (!lastImageBlob) return;
     btnOcr.disabled = true; btnOcr.textContent = "OCR çalışıyor...";
-    // overlay açık, logo “loading” modunda net–soluk döngüsü
     overlayHint.textContent = "OCR çalışıyor…";
-    brandLogo.classList.add('loading');
-    overlay.classList.remove('hidden');
+    showOverlay(); // SADECE OCR sırasında aç
 
     try {
       const { fullText, bestData } = await ocrMultiPass(lastImageBlob, m => {
@@ -507,14 +504,11 @@
     } finally {
       btnOcr.textContent = "OCR ile Doldur";
       btnOcr.disabled = false;
-      // Yükleme bitti → overlay kapanır, logo idle moda döner
-      brandLogo.classList.remove('loading');
-      overlay.classList.add('hidden');
-      overlayHint.textContent = "Hazır… Kamerayı açabilir veya fotoğraf yükleyebilirsin.";
+      hideOverlay(); // BİTER BİTMEZ kapat
     }
   };
 
-  /* -------- Kaydet (Firestore + Storage) -------- */
+  /* ===== Kaydet ===== */
   btnSave.onclick = async () => {
     if (!db || !storage || !uid) { saveMsg.innerHTML = '<span class="warn">Firebase yapılandır.</span>'; return; }
     if (!fields.name.value.trim()) { saveMsg.innerHTML = '<span class="warn">Şirket adı zorunlu.</span>'; return; }
@@ -552,11 +546,16 @@
     }
   };
 
-  /* -------- İlk açılışta overlay açık; destek yoksa fallback -------- */
+  /* ===== İlk açılış: overlay KAPALI kalsın; destek yoksa fallback ===== */
+  overlay.classList.remove('active'); // garanti
   if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
     camLog.innerHTML = '<span class="warn">Tarayıcı kamera API’sını yerel olarak göstermiyor, fotoğraf yükleme moduna geçildi.</span>';
     useFileCaptureFallback();
   }
+
+  // İstenirse kullanıcı overlay’e tıklayınca da kapatabilsin (kaçış kapısı)
+  overlay.addEventListener('click', hideOverlay);
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') hideOverlay(); });
   </script>
 </body>
 </html>
