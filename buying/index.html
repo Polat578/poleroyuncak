@@ -26,7 +26,7 @@
     .ok{color:#22c55e}.warn{color:#f59e0b}.err{color:#ef4444}
     .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
 
-    /* Logo overlay */
+    /* ====== Logo overlay & animasyon ====== */
     .overlay{
       position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
       background:rgba(11,18,32,0.85); z-index:9999; transition:opacity .25s ease;
@@ -34,12 +34,23 @@
     .overlay.hidden{opacity:0; pointer-events:none}
     .logo-wrap{display:flex; flex-direction:column; align-items:center; gap:12px}
     .logo{
-      width:140px; height:140px; object-fit:contain; filter:blur(1.5px) brightness(1.2);
-      animation: pulse 1.6s ease-in-out infinite;
+      width:140px; height:140px; object-fit:contain;
+      /* boşta hafif nefes alma */
+      animation: idlePulse 2s ease-in-out infinite;
+      filter:blur(1.2px) brightness(1.1);
+      opacity:.85;
     }
-    .logo.active{filter:blur(0.2px) brightness(1.0)}
-    @keyframes pulse{
-      0%{opacity:.55} 50%{opacity:1} 100%{opacity:.55}
+    /* OCR sırasında net–soluk döngüsü */
+    .logo.loading{
+      animation: breatheSharp 1.2s ease-in-out infinite;
+    }
+    @keyframes idlePulse{
+      0%{opacity:.75} 50%{opacity:1} 100%{opacity:.75}
+    }
+    @keyframes breatheSharp{
+      0%  { opacity:.45; filter:blur(1.8px) brightness(1.15); }
+      50% { opacity:1;   filter:blur(0.2px) brightness(1.0);  }
+      100%{ opacity:.45; filter:blur(1.8px) brightness(1.15); }
     }
   </style>
 </head>
@@ -49,7 +60,7 @@
     <div class="logo-wrap">
       <!-- logoyu /buying/logso.png olarak koy -->
       <img id="brandLogo" class="logo" src="logso.png" alt="Poler Oyuncak" />
-      <div class="hint">Hazır… Kamerayı açabilir veya fotoğraf yükleyebilirsin.</div>
+      <div class="hint" id="overlayHint">Hazır… Kamerayı açabilir veya fotoğraf yükleyebilirsin.</div>
     </div>
   </div>
 
@@ -165,6 +176,7 @@
 
   const overlay = document.getElementById('overlay');
   const brandLogo = document.getElementById('brandLogo');
+  const overlayHint = document.getElementById('overlayHint');
 
   const video = document.getElementById('video');
   const canvas = document.getElementById('canvas');
@@ -186,7 +198,7 @@
 
   let stream = null, lastImageBlob = null, ocrText = "";
 
-  /* -------- Yardımcılar: normalizasyon / e-posta / tel / adres -------- */
+  /* -------- Normalizasyon & Yakalama -------- */
   function normalizeOCRText(s) {
     if (!s) return "";
     return s
@@ -291,7 +303,7 @@
     return await new Promise(res=>c.toBlob(res,'image/jpeg',0.95));
   }
 
-  /* -------- Akıllı isim ve ilgili kişi seçimi -------- */
+  /* -------- Akıllı isim & ilgili kişi -------- */
   function pickCompanyNameSmart(ocrData) {
     const lines = ocrData?.lines || [];
     if (!lines.length) return null;
@@ -313,7 +325,6 @@
   }
 
   function looksLikePersonName(line){
-    // Türkçe ad-soyad: 2-3 kelime, Baş Harf büyük, rakam yok, @ yok
     if (!line || /[@\d]/.test(line)) return false;
     const parts=line.trim().split(/\s+/);
     if (parts.length<2 || parts.length>4) return false;
@@ -321,16 +332,13 @@
   }
 
   function pickContactPerson(ocrData, fullText){
-    // 1) Ünvan ipuçları olan satırlar
     const keywords = /(ilgili|iletişim|contact|satış|sales|pazarlama|marketing|müdür|manager|owner|kurucu|genel müdür|director|representative|temsilci)/i;
     const linesData = ocrData?.lines || [];
     const byKW = linesData.map(l => (l.text||"").trim()).filter(t => keywords.test(t));
     for (const t of byKW){
-      // aynı satırdan isim çekmeyi dene
       const cand = t.replace(keywords, '').trim();
       if (looksLikePersonName(cand)) return cand;
     }
-    // 2) Kelimeleri bir önceki/sonraki satırla birlikte düşün
     for (let i=0;i<linesData.length;i++){
       const t=(linesData[i].text||"").trim();
       if (keywords.test(t)){
@@ -340,7 +348,6 @@
         if (looksLikePersonName(next)) return next;
       }
     }
-    // 3) Genel satırlardan kişi adı kalıbına uyanı bul (e-posta/telefon/adres olmayan)
     const plain = (fullText||"").split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
     for (const l of plain){
       if (looksLikePersonName(l) && !/@/.test(l) && !/\d/.test(l) &&
@@ -384,7 +391,7 @@
         btnRetake.disabled = false;
         btnOcr.disabled = false;
         camLog.textContent = "Fotoğraf yüklendi. OCR için hazır.";
-        overlay.classList.add('hidden'); // resim var, bekleme kalksın
+        overlay.classList.add('hidden');
       }
     };
 
@@ -464,12 +471,13 @@
     }
   };
 
-  /* -------- OCR (multi-pass) -------- */
+  /* -------- OCR (multi-pass) + net–soluk logo -------- */
   btnOcr.onclick = async () => {
     if (!lastImageBlob) return;
     btnOcr.disabled = true; btnOcr.textContent = "OCR çalışıyor...";
-    // logo “netleşsin”
-    brandLogo.classList.add('active');
+    // overlay açık, logo “loading” modunda net–soluk döngüsü
+    overlayHint.textContent = "OCR çalışıyor…";
+    brandLogo.classList.add('loading');
     overlay.classList.remove('hidden');
 
     try {
@@ -480,7 +488,6 @@
       ocrText = fullText.trim();
       rawText.textContent = ocrText || "(metin bulunamadı)";
 
-      // Alanlar
       const emails = findEmails(ocrText);
       const phones = findPhones(ocrText);
       const address = findAddressLine(ocrText);
@@ -500,9 +507,10 @@
     } finally {
       btnOcr.textContent = "OCR ile Doldur";
       btnOcr.disabled = false;
-      // logo tekrar “bekleme” durumuna dönsün
-      brandLogo.classList.remove('active');
+      // Yükleme bitti → overlay kapanır, logo idle moda döner
+      brandLogo.classList.remove('loading');
       overlay.classList.add('hidden');
+      overlayHint.textContent = "Hazır… Kamerayı açabilir veya fotoğraf yükleyebilirsin.";
     }
   };
 
@@ -544,7 +552,7 @@
     }
   };
 
-  /* -------- İlk açılışta bekleme overlay'i kalsın; destek yoksa fallback -------- */
+  /* -------- İlk açılışta overlay açık; destek yoksa fallback -------- */
   if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
     camLog.innerHTML = '<span class="warn">Tarayıcı kamera API’sını yerel olarak göstermiyor, fotoğraf yükleme moduna geçildi.</span>';
     useFileCaptureFallback();
