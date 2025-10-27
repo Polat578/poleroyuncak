@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>Poler Oyuncak — Kartvizit Tara</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0ea5e9" />
+  <style>
+    :root { --bg:#0b1220; --fg:#eaf2ff; --muted:#9fb3c8; --brand:#0ea5e9; }
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif}
+    header{padding:16px 20px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;gap:8px;align-items:center}
+    header h1{margin:0;font-size:18px;font-weight:700}
+    main{max-width:960px;margin:0 auto;padding:16px}
+    .grid{display:grid;grid-template-columns:1fr;gap:16px}
+    @media(min-width:900px){.grid{grid-template-columns:1.1fr .9fr}}
+    .card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:14px}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    video,canvas,img{width:100%;border-radius:12px;background:#000}
+    button{appearance:none;border:0;background:var(--brand);color:#001018;padding:12px 16px;border-radius:12px;font-weight:700;cursor:pointer}
+    button.ghost{background:transparent;color:var(--fg);border:1px solid rgba(255,255,255,.2)}
+    label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+    input,textarea{width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.03);color:var(--fg)}
+    textarea{min-height:92px;resize:vertical}
+    .hint{color:var(--muted);font-size:13px}
+    .ok{color:#22c55e}.warn{color:#f59e0b}.err{color:#ef4444}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Poler Oyuncak • Kartvizit Tara</h1>
+    <span class="hint">/buying</span>
+  </header>
+  <main>
+    <div class="grid">
+      <!-- Kamera & Çekim -->
+      <section class="card">
+        <h2 style="margin:0 0 8px 0">1) Kartviziti Tara</h2>
+        <p class="hint" id="permHint">Kamera izni isteyeceğiz. Işık iyi olsun, kart kadrajı doldursun.</p>
+        <div class="row">
+          <button id="btnStart">Kamerayı Aç</button>
+          <button id="btnCapture" class="ghost" disabled>Fotoğraf Çek</button>
+          <button id="btnRetake" class="ghost" disabled>Tekrar Çek</button>
+        </div>
+        <div style="margin-top:10px">
+          <video id="video" playsinline muted></video>
+          <canvas id="canvas" style="display:none"></canvas>
+          <img id="preview" alt="Önizleme" style="display:none"/>
+        </div>
+        <p class="hint mono" id="camLog"></p>
+      </section>
+
+      <!-- Form & OCR -->
+      <section class="card">
+        <h2 style="margin:0 0 8px 0">2) Kontrol Et & Kaydet</h2>
+        <p class="hint">OCR otomatik doldurur; gerekirse düzelt.</p>
+
+        <div class="row" style="gap:12px">
+          <div style="flex:1">
+            <label for="name">Şirket Adı</label>
+            <input id="name" placeholder="Örn: Poler Oyuncak A.Ş." />
+          </div>
+          <div style="width:240px;max-width:100%">
+            <label for="phone">Telefon</label>
+            <input id="phone" placeholder="+90 5xx xxx xx xx" />
+          </div>
+        </div>
+
+        <div class="row" style="gap:12px;margin-top:8px">
+          <div style="flex:1">
+            <label for="email">E-posta</label>
+            <input id="email" placeholder="info@..."/>
+          </div>
+          <div style="flex:1">
+            <label for="address">Adres</label>
+            <input id="address" placeholder="Mah., Cad., No, İl/İlçe..." />
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:12px">
+          <button id="btnOcr" class="ghost" disabled>OCR ile Doldur</button>
+          <button id="btnSave" disabled>Kaydet</button>
+          <span id="saveMsg" class="hint"></span>
+        </div>
+
+        <details style="margin-top:12px">
+          <summary class="hint">OCR ham metni göster</summary>
+          <pre id="rawText" class="mono" style="white-space:pre-wrap"></pre>
+        </details>
+
+        <details style="margin-top:12px">
+          <summary class="hint">Firebase yapılandırması (gerekli)</summary>
+          <pre class="mono">
+1) <a href="https://console.firebase.google.com" target="_blank" rel="noopener">Firebase Console</a> → proje oluştur → Web app ekle.
+2) Aşağıdaki config'i doldur.
+3) Firestore Rules:
+service cloud.firestore {
+  match /databases/{db}/documents {
+    match /companies/{id} {
+      allow read, update, delete: if request.auth!=null && request.auth.uid==resource.data.owner;
+      allow create: if request.auth!=null && request.resource.data.owner==request.auth.uid;
+    }
+  }
+}
+4) Storage Rules:
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /cards/{ownerId}/{allPaths=**} {
+      allow read, write: if request.auth!=null && request.auth.uid==ownerId;
+    }
+  }
+}
+          </pre>
+        </details>
+      </section>
+    </div>
+  </main>
+
+  <!-- Tesseract.js (OCR) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
+
+  <script>
+  // ------------------ Firebase Config (DOLDUR) ------------------
+  const firebaseConfig = {
+    apiKey:     "PASTE_ME",
+    authDomain: "PASTE_ME.firebaseapp.com",
+    projectId:  "PASTE_ME",
+    storageBucket: "PASTE_ME.appspot.com",
+    appId:      "PASTE_ME",
+  };
+  // --------------------------------------------------------------
+
+  let app, auth, db, storage, uid = null;
+  try {
+    app = firebase.initializeApp(firebaseConfig);
+    auth = firebase.auth();
+    db = firebase.firestore();
+    storage = firebase.storage();
+    // Anonim login
+    auth.onAuthStateChanged(async (u) => {
+      if (!u) await auth.signInAnonymously();
+      uid = (auth.currentUser || u).uid;
+      document.getElementById('btnSave').disabled = false; // login tamam
+    });
+  } catch (e) {
+    console.warn("Firebase init edilemedi (config girilmemiş olabilir):", e);
+  }
+
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const preview = document.getElementById('preview');
+  const btnStart = document.getElementById('btnStart');
+  const btnCapture = document.getElementById('btnCapture');
+  const btnRetake = document.getElementById('btnRetake');
+  const btnOcr = document.getElementById('btnOcr');
+  const btnSave = document.getElementById('btnSave');
+  const camLog = document.getElementById('camLog');
+  const rawText = document.getElementById('rawText');
+  const saveMsg = document.getElementById('saveMsg');
+
+  const $ = (id) => document.getElementById(id);
+  const fields = { name: $('name'), phone: $('phone'), email: $('email'), address: $('address') };
+
+  let stream = null, lastImageBlob = null, ocrText = "";
+
+  // Kamera aç
+  btnStart.onclick = async () => {
+    try {
+      if (stream) { stream.getTracks().forEach(t=>t.stop()); }
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+      btnCapture.disabled = false;
+      btnRetake.disabled = true;
+      btnOcr.disabled = true;
+      preview.style.display = 'none';
+      canvas.style.display = 'none';
+      video.style.display = 'block';
+      camLog.textContent = "Kamera aktif.";
+    } catch (err) {
+      camLog.innerHTML = `Kamera açılamadı: <span class="err">${err.message}</span>`;
+    }
+  };
+
+  // Fotoğraf çek
+  btnCapture.onclick = async () => {
+    if (!video.videoWidth) { camLog.textContent = "Kamera hazır değil."; return; }
+    const w = video.videoWidth, h = video.videoHeight;
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, w, h);
+
+    // Önizleme + blob
+    canvas.toBlob((blob) => {
+      lastImageBlob = blob;
+      preview.src = URL.createObjectURL(blob);
+      preview.style.display = 'block';
+      video.style.display = 'none';
+      canvas.style.display = 'none';
+      btnRetake.disabled = false;
+      btnOcr.disabled = false;
+      camLog.textContent = "Fotoğraf alındı. OCR için hazır.";
+    }, 'image/jpeg', 0.92);
+  };
+
+  // Tekrar çek
+  btnRetake.onclick = () => {
+    preview.style.display = 'none';
+    video.style.display = 'block';
+    btnOcr.disabled = true;
+    camLog.textContent = "Tekrar çekebilirsiniz.";
+  };
+
+  // Basit alan çıkarımı (TR ağırlıklı)
+  function extractFields(text) {
+    // E-posta
+    const email = (text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)||[])[0]||"";
+    // Telefon (TR mobil/alan kodlarıyla gevşek)
+    const tel = (text.match(/(\+?90[\s\-]?)?0?\s?5\d{2}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}|(\+?90[\s\-]?)?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}/)||[])[0]||"";
+    // Adres ipuçları
+    const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+    const addrLine = lines.find(l => /mah\.|mh\.|cad\.|cd\.|sok\.|sk\.|no[:\s]|ilçe|istanbul|ankara|izmir|bursa|koçaeli|antalya|adana|konya|gaziantep|kayseri|mersin|eskişehir/i.test(l)) || "";
+    // Şirket adı heuristiği: üst satırlardan, rakam içermeyen kısa satır
+    const nameCand = lines.slice(0,5).find(l => !/\d/.test(l) && l.length<=32) || lines[0] || "";
+
+    return { name: nameCand, phone: tel, email: email, address: addrLine };
+  }
+
+  // OCR çalıştır
+  btnOcr.onclick = async () => {
+    if (!lastImageBlob) return;
+    btnOcr.disabled = true; btnOcr.textContent = "OCR çalışıyor...";
+    try {
+      const { data } = await Tesseract.recognize(lastImageBlob, 'tur+eng', {
+        logger: m => { camLog.textContent = `OCR: ${m.status} ${Math.round((m.progress||0)*100)}%`; }
+      });
+      ocrText = (data.text || "").trim();
+      rawText.textContent = ocrText || "(metin bulunamadı)";
+      const info = extractFields(ocrText);
+      fields.name.value = info.name;
+      fields.phone.value = info.phone;
+      fields.email.value = info.email;
+      fields.address.value = info.address;
+      btnSave.disabled = false;
+      camLog.innerHTML = `OCR tamam: <span class="ok">alanlar dolduruldu</span>`;
+    } catch (e) {
+      camLog.innerHTML = `OCR hata: <span class="err">${e.message}</span>`;
+    } finally {
+      btnOcr.textContent = "OCR ile Doldur";
+      btnOcr.disabled = false;
+    }
+  };
+
+  // Kaydet → Firebase Storage + Firestore
+  btnSave.onclick = async () => {
+    if (!db || !storage || !uid) { saveMsg.innerHTML = '<span class="warn">Firebase yapılandır.</span>'; return; }
+    if (!fields.name.value.trim()) { saveMsg.innerHTML = '<span class="warn">Şirket adı zorunlu.</span>'; return; }
+    btnSave.disabled = true; saveMsg.textContent = "Kaydediliyor...";
+
+    try {
+      // 1) Foto yükle
+      let imageUrl = null;
+      if (lastImageBlob) {
+        const key = `cards/${uid}/${crypto.randomUUID()}.jpg`;
+        const ref = storage.ref().child(key);
+        await ref.put(lastImageBlob, { contentType: 'image/jpeg' });
+        imageUrl = await ref.getDownloadURL();
+      }
+      // 2) DB yaz
+      const doc = {
+        name: fields.name.value.trim(),
+        phone: fields.phone.value.trim() || null,
+        email: fields.email.value.trim() || null,
+        address: fields.address.value.trim() || null,
+        cardImageUrl: imageUrl,
+        owner: uid,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        ocrRaw: ocrText || null
+      };
+      await db.collection('companies').add(doc);
+      saveMsg.innerHTML = '<span class="ok">Kaydedildi ✅</span>';
+      // formu temizle
+      Object.values(fields).forEach(i => i.value = "");
+      rawText.textContent = "";
+    } catch (e) {
+      saveMsg.innerHTML = `<span class="err">Hata: ${e.message}</span>`;
+    } finally {
+      btnSave.disabled = false;
+    }
+  };
+
+  // iOS ipuçları
+  if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
+    camLog.innerHTML = '<span class="err">Tarayıcı kamera API’sını desteklemiyor.</span>';
+  }
+  </script>
+</body>
+</html>
